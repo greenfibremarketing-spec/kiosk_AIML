@@ -1,31 +1,44 @@
 """LangChain & LangGraph brain for the Green Fibre AI Avatar Kiosk.
 
 Constructs the conversational engine using modern LangGraph StateGraph,
-selectable LLM factory (Groq, Anthropic, Mock), rate-limit retry with exponential backoff,
-RAG retrieval context, and thread-based memory checkpointing.
+selectable LLM factory (Groq, Anthropic, Mock), tool calling (search, details, stock, bundles),
+RAG retrieval context, rate-limit retry with exponential backoff, and thread-based memory checkpointing.
 """
 
+import json
 import logging
 import re
 import time
-from typing import Any, Dict, Iterator, List, Optional
+import uuid
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 # LangChain Core imports
 # BaseChatModel: Standard abstract base class for all LangChain chat models.
 from langchain_core.language_models.chat_models import BaseChatModel
-# AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage: Standard message types.
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
-# ChatGeneration, ChatGenerationChunk, ChatResult: Containers for chat model generation results.
+# Message types: Standard message representations in conversational graph workflows.
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+# Output containers
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.tools import BaseTool
 
 # LangGraph imports
-# StateGraph & MessagesState: Graph-based orchestration for multi-turn conversations.
+# StateGraph, MessagesState, ToolNode, tools_condition: Modern orchestration for agents with tool calling.
 from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.callbacks import TraceCallbackHandler
 from app.config import settings
 from app.rag import retrieve_relevant_chunks
 from app.sessions import session_manager
+from app.tools import ALL_TOOLS
 
 logger = logging.getLogger("green_fibre.brain")
 
@@ -40,11 +53,13 @@ STRICT VOICE & SPOKEN RULES:
 4. NEVER use bullet points or numbered lists. Use flowing sentences instead.
 5. NEVER use emojis.
 
-GUARDRAILS & BOUNDARIES:
-1. Stay focused exclusively on Green Fibre: products, sustainable materials, order status, shipping, returns, and brand mission.
-2. If asked about unrelated topics (such as politics, coding, general trivia, or competitors), politely decline: "I can only assist with Green Fibre products and store policies."
-3. Never invent facts, prices, discounts, or stock levels. If you do not have verified information from the knowledge base, honestly state that you do not know.
-4. Never ask for or store sensitive personal information such as passwords, credit card numbers, or full payment details.
+TOOL USAGE & ACCURACY GUARDRAILS:
+1. You have access to tools for searching products, checking product details, checking stock, and finding gift bundles.
+2. CRITICAL: You must NEVER state or invent a product price, discount, or stock number unless it was returned by a tool call in the current conversation.
+3. When recommending or describing items, state the exact price and stock from the tool output.
+4. If a tool returns no products or states that an item is not in the catalog, state honestly and politely that Green Fibre does not carry it.
+5. Never ask for or store sensitive personal information such as passwords or credit cards.
+6. For non-product topics (shipping, returns, materials, store hours), use the verified knowledge base context. If information is not available, honestly say you do not know.
 """
 
 FALLBACK_RATE_LIMIT_REPLY = (
@@ -87,7 +102,17 @@ def clean_spoken_text(text: str) -> str:
 
 
 class MockKioskChatModel(BaseChatModel):
-    """Realistic offline fallback chat model for kiosk development and testing."""
+    """Realistic offline fallback chat model for kiosk development and testing.
+    
+    Emulates tool calling and RAG grounding without requiring external API credentials.
+    """
+
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], type, Callable, BaseTool]],
+        **kwargs: Any,
+    ) -> Runnable[Any, BaseMessage]:
+        return self
 
     def _generate(
         self,
@@ -96,15 +121,29 @@ class MockKioskChatModel(BaseChatModel):
         run_manager: Optional[Any] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        last_message = ""
-        system_context = ""
-        for m in messages:
-            if isinstance(m, SystemMessage):
-                system_context += " " + str(m.content)
-            elif isinstance(m, HumanMessage):
-                last_message = str(m.content).strip()
+        # Check if the last message was a ToolMessage
+        last_msg = messages[-1]
+        if isinstance(last_msg, ToolMessage):
+            # Synthesize final spoken answer from verified tool data
+            spoken_reply = self._synthesize_tool_reply(last_msg.content)
+            generation = ChatGeneration(message=AIMessage(content=spoken_reply))
+            return ChatResult(generations=[generation])
 
-        text = self._generate_response_text(last_message, system_context)
+        # Find the latest human message
+        last_human_query = ""
+        for m in reversed(messages):
+            if isinstance(m, HumanMessage):
+                last_human_query = str(m.content).strip()
+                break
+
+        # Check if query needs a tool call
+        tool_call = self._decide_tool_call(last_human_query)
+        if tool_call:
+            generation = ChatGeneration(message=AIMessage(content="", tool_calls=[tool_call]))
+            return ChatResult(generations=[generation])
+
+        # Otherwise answer conversational / RAG policy questions
+        text = self._generate_rag_reply(last_human_query)
         generation = ChatGeneration(message=AIMessage(content=text))
         return ChatResult(generations=[generation])
 
@@ -115,24 +154,98 @@ class MockKioskChatModel(BaseChatModel):
         run_manager: Optional[Any] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        last_message = ""
-        system_context = ""
-        for m in messages:
-            if isinstance(m, SystemMessage):
-                system_context += " " + str(m.content)
-            elif isinstance(m, HumanMessage):
-                last_message = str(m.content).strip()
+        result = self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        ai_msg = result.generations[0].message
+        if isinstance(ai_msg, AIMessage) and ai_msg.tool_calls:
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_calls=ai_msg.tool_calls))
+        else:
+            full_text = str(ai_msg.content)
+            words = full_text.split(" ")
+            for i, word in enumerate(words):
+                chunk_text = word if i == len(words) - 1 else word + " "
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=chunk_text))
+                if run_manager:
+                    run_manager.on_llm_new_token(chunk_text)
+                yield chunk
 
-        full_text = self._generate_response_text(last_message, system_context)
-        words = full_text.split(" ")
-        for i, word in enumerate(words):
-            chunk_text = word if i == len(words) - 1 else word + " "
-            chunk = ChatGenerationChunk(message=AIMessageChunk(content=chunk_text))
-            if run_manager:
-                run_manager.on_llm_new_token(chunk_text)
-            yield chunk
+    def _decide_tool_call(self, query: str) -> Optional[Dict[str, Any]]:
+        q = query.lower()
 
-    def _generate_response_text(self, query: str, context: str) -> str:
+        # Check stock inquiry
+        if any(w in q for w in ["stock", "in stock", "how many", "quantity", "inventory"]):
+            for pid in ["gf-tee-01", "gf-hood-02", "gf-pant-03", "gf-sock-04", "gf-towel-05", "gf-bed-06", "gf-tote-07"]:
+                if pid in q:
+                    return {
+                        "name": "check_stock",
+                        "args": {"product_id": pid.upper()},
+                        "id": f"call_{uuid.uuid4().hex[:6]}",
+                        "type": "tool_call",
+                    }
+            if "hoodie" in q:
+                return {"name": "check_stock", "args": {"product_id": "GF-HOOD-02"}, "id": f"call_{uuid.uuid4().hex[:6]}", "type": "tool_call"}
+            if "tee" in q or "t-shirt" in q:
+                return {"name": "check_stock", "args": {"product_id": "GF-TEE-01"}, "id": f"call_{uuid.uuid4().hex[:6]}", "type": "tool_call"}
+
+        # Gift bundles inquiry
+        if any(w in q for w in ["bundle", "gift", "package", "budget"]):
+            budget = None
+            numbers = re.findall(r"\d+", q)
+            if numbers:
+                budget = float(numbers[0])
+            return {
+                "name": "get_gift_bundles",
+                "args": {"budget": budget},
+                "id": f"call_{uuid.uuid4().hex[:6]}",
+                "type": "tool_call",
+            }
+
+        # Product search inquiry
+        product_keywords = ["hoodie", "tee", "shirt", "pant", "sock", "towel", "duvet", "tote", "apron", "soap", "robe", "jacket", "leather", "nylon", "polyester", "price", "how much", "cost", "buy"]
+        if any(w in q for w in product_keywords):
+            search_term = q.replace("do you have", "").replace("what is the price of", "").replace("how much is", "").replace("tell me about", "").strip()
+            return {
+                "name": "search_products",
+                "args": {"query": search_term or q},
+                "id": f"call_{uuid.uuid4().hex[:6]}",
+                "type": "tool_call",
+            }
+
+        return None
+
+    def _synthesize_tool_reply(self, tool_output: str) -> str:
+        # Check for empty / not found
+        if "No products found" in tool_output or "not found" in tool_output:
+            return "I checked our store catalog and we do not have that item in stock. We only offer verified organic and plant-based goods."
+
+        if "currently in stock" in tool_output or "out of stock" in tool_output:
+            return tool_output
+
+        try:
+            data = json.loads(tool_output)
+            if isinstance(data, list) and data:
+                item = data[0]
+                if "regular_value" in item:
+                    # Gift bundle
+                    return (
+                        f"We offer the {item['name']} for {int(item['price'])} dollars, "
+                        f"which includes {len(item.get('items', []))} curated eco essentials."
+                    )
+                # Single product
+                return (
+                    f"Our {item['name']} is available for {int(item['price'])} dollars. "
+                    f"{item.get('description', '')}"
+                )
+            if isinstance(data, dict):
+                return (
+                    f"Our {data.get('name', 'product')} is priced at {int(data.get('price', 0))} dollars, "
+                    f"with {data.get('stock', 0)} units currently available."
+                )
+        except Exception:
+            pass
+
+        return clean_spoken_text(tool_output)
+
+    def _generate_rag_reply(self, query: str) -> str:
         q = query.lower()
 
         # Off-topic guardrail checks
@@ -163,15 +276,7 @@ class MockKioskChatModel(BaseChatModel):
         if "seed" in q or "tag" in q or "plant" in q:
             return "Every price tag is embedded with non-GMO wildflower and thyme seeds that you can plant directly in soil to grow garden blooms."
 
-        # Brand / Origins (grounded in brand_story.md)
-        if "founder" in q or "origin" in q or "who started" in q:
-            return "Green Fibre was founded in 2021 by textile designers Elena Vance and Marcus Chen in Portland, Oregon."
-
-        # Gift wrap (grounded in faq.md)
-        if "gift" in q or "wrap" in q:
-            return "We offer biodegradable seed paper gift wrapping for four dollars and ninety-nine cents, or reusable organic cotton furoshiki wraps for nine dollars and ninety-nine cents."
-
-        # Default fallback
+        # Default honest fallback
         return "I don't have that specific information in my store records. May I help you with another question about our products or policies?"
 
     @property
@@ -232,7 +337,7 @@ def get_llm() -> BaseChatModel:
 
 
 def invoke_llm_with_retry(
-    llm: BaseChatModel,
+    llm: Runnable,
     messages: List[BaseMessage],
     max_retries: int = 3,
     initial_backoff: float = 1.0,
@@ -243,7 +348,6 @@ def invoke_llm_with_retry(
     If retries are exhausted, returns a friendly spoken fallback reply.
     """
     backoff = initial_backoff
-    last_exception: Optional[Exception] = None
 
     for attempt in range(max_retries + 1):
         try:
@@ -251,7 +355,6 @@ def invoke_llm_with_retry(
         except Exception as e:
             err_str = str(e).lower()
             is_rate_limit = "429" in err_str or "rate_limit" in err_str or "rate limit" in err_str
-            last_exception = e
 
             if is_rate_limit and attempt < max_retries:
                 logger.warning(
@@ -264,20 +367,18 @@ def invoke_llm_with_retry(
                 if is_rate_limit:
                     logger.error("Rate limit retries exhausted: %s", e)
                     return AIMessage(content=FALLBACK_RATE_LIMIT_REPLY)
-                # Re-raise non-rate-limit errors
                 raise e
 
     return AIMessage(content=FALLBACK_RATE_LIMIT_REPLY)
 
 
-from langchain_core.runnables import RunnableConfig
-
-
 def create_kiosk_graph():
-    """Create the conversational LangGraph state machine with RAG and LLM factory."""
+    """Create the conversational LangGraph agent with tool calling, RAG, and memory."""
     llm = get_llm()
+    # Bind product tools to the model
+    model_with_tools = llm.bind_tools(ALL_TOOLS)
 
-    def call_model(state: MessagesState, config: Optional[RunnableConfig] = None) -> Dict[str, List[BaseMessage]]:
+    def agent_node(state: MessagesState, config: Optional[RunnableConfig] = None) -> Dict[str, List[BaseMessage]]:
         # Extract user query
         user_query = ""
         for m in reversed(state["messages"]):
@@ -317,13 +418,17 @@ def create_kiosk_graph():
         messages = [SystemMessage(content=system_content)] + state["messages"]
 
         # Call model with retry wrapper for 429 backoff
-        response = invoke_llm_with_retry(llm, messages)
+        response = invoke_llm_with_retry(model_with_tools, messages)
         return {"messages": [response]}
 
+    # LangGraph StateGraph with ToolNode and conditional edges
     workflow = StateGraph(state_schema=MessagesState)
-    workflow.add_node("model", call_model)
-    workflow.add_edge(START, "model")
-    workflow.add_edge("model", END)
+    workflow.add_node("agent", agent_node)
+    workflow.add_node("tools", ToolNode(ALL_TOOLS))
+
+    workflow.add_edge(START, "agent")
+    workflow.add_conditional_edges("agent", tools_condition)
+    workflow.add_edge("tools", "agent")
 
     app = workflow.compile(checkpointer=session_manager.checkpointer)
     return app

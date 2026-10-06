@@ -1,0 +1,177 @@
+{
+  "products": [
+    {
+      "id": "GF-TEE-01",
+      "name": "Everyday Organic Cotton Tee",
+      "category": "Apparel",
+      "price": 38.00,
+      "stock": 45,
+      "description": "A classic crewneck t-shirt cut for everyday comfort. Features soft ring-spun yarn and reinforced collar stitching.",
+      "sustainability_notes": "100% GOTS-certified organic combed cotton. Zero toxic pesticides, uses 91% less water through rainwater harvesting."
+    },
+    {
+      "id": "GF-HOOD-02",
+      "name": "Himalayan Hemp Relaxed Hoodie",
+      "category": "Apparel",
+      "price": 88.00,
+      "stock": 22,
+      "description": "An ultra-durable, cozy pullover hoodie with a double-lined hood and roomy kangaroo pocket.",
+      "sustainability_notes": "55% Himalayan organic hemp and 45% organic cotton fleece. Carbon-negative crop grown without chemical fertilizers."
+    },
+    {
+      "id": "GF-PANT-03",
+      "name": "Normandy Linen Lounge Pants",
+      "category": "Apparel",
+      "price": 74.00,
+      "stock": 18,
+      "description": "Relaxed-fit drawstring trousers designed for breezy lounging and warm weather strolls.",
+      "sustainability_notes": "100% European flax linen grown in Normandy with zero irrigation beyond natural rainfall. Finished with corozo nut buttons."
+    },
+    {
+      "id": "GF-SOCK-04",
+      "name": "Bamboo Lyocell Cushioned Socks 3-Pack",
+      "category": "Accessories",
+      "price": 24.00,
+      "stock": 60,
+      "description": "Breathable, moisture-wicking crew socks with reinforced arch support and seamless toes.",
+      "sustainability_notes": "Closed-loop organic bamboo lyocell where 99% of non-toxic solvents are captured and recycled. Naturally odor-resistant."
+    },
+    {
+      "id": "GF-TOWEL-05",
+      "name": "Waffle Weave Organic Bath Towel",
+      "category": "Home Goods",
+      "price": 42.00,
+      "stock": 30,
+      "description": "Plush, fast-drying bath towel with a textured waffle grid that gently exfoliates skin.",
+      "sustainability_notes": "100% long-staple Turkish organic cotton certified by OEKO-TEX Standard 100. Free from synthetic silicone softeners."
+    },
+    {
+      "id": "GF-BED-06",
+      "name": "Flax Linen Duvet Cover Set",
+      "category": "Home Goods",
+      "price": 185.00,
+      "stock": 12,
+      "description": "A breathable queen duvet cover and matching pillow shams that grow softer with every wash.",
+      "sustainability_notes": "Pure Belgian flax linen pre-washed with natural pumice stones. Thermoregulating natural fibers keep you cool in summer and warm in winter."
+    },
+    {
+      "id": "GF-TOTE-07",
+      "name": "Heavyweight Raw Hemp Market Tote",
+      "category": "Bags",
+      "price": 32.00,
+      "stock": 50,
+      "description": "Spacious grocery and market tote with double-thick shoulder straps and internal key clip pocket.",
+      "sustainability_notes": "16-ounce raw Himalayan hemp canvas. Highly resistant to mold, UV degradation, and bacterial growth."
+    },
+    {
+      "id": "GF-APRON-08",
+      "name": "Artisan Flax Linen Kitchen Apron",
+      "category": "Home Goods",
+      "price": 48.00,
+      "stock": 15,
+      "description": "Chef-grade cross-back apron with twin utility pockets and towel loop. No neck strain.",
+      "sustainability_notes": "100% stonewashed Normandy flax linen. Biodegradable and naturally stain-resistant without chemical coatings."
+    },
+    {
+      "id": "GF-BLANK-09",
+      "name": "Herringbone Organic Cotton Throw",
+      "category": "Home Goods",
+      "price": 68.00,
+      "stock": 14,
+      "description": "Generously sized sofa throw blanket with fringed edges and a classic herringbone weave.",
+      "sustainability_notes": "Handwoven by fair-trade artisan cooperatives in Tamil Nadu, India. Colored with botanical extracts."
+    },
+    {
+      "id": "GF-ROBE-10",
+      "name": "Cloud Bamboo Kimono Robe",
+      "category": "Apparel",
+      "price": 95.00,
+      "stock": 16,
+      "description": "Silky-smooth loungewear robe featuring wide kimono sleeves, removable waist tie, and hidden deep pockets.",
+      "sustainability_notes": "FSC-certified organic bamboo lyocell. Uses zero chlorine bleach or petrochemical finishes."
+    },
+    {
+      "id": "GF-CAP-11",
+      "name": "Organic Cotton Corduroy Cap",
+      "category": "Accessories",
+      "price": 34.00,
+      "stock": 28,
+      "description": "Unstructured six-panel baseball cap in soft wide-wale corduroy with an antique brass adjustment slider.",
+      "sustainability_notes": "100% GOTS organic cotton. Recycled ocean-plastic brim insert encased in organic cotton twill."
+    },
+    {
+      "id": "GF-PADS-12",
+      "name": "Zero-Waste Organic Makeup Rounds 10-Pack",
+      "category": "Wellness",
+      "price": 18.00,
+      "stock": 75,
+      "description": "Reusable multi-layer facial cleansing rounds with a breathable organic cotton mesh laundry wash bag.",
+      "sustainability_notes": "Triple-layer organic cotton fleece. Replaces thousands of single-use disposable cotton pads over its lifetime."
+    },
+    {
+      "id": "GF-SCARF-13",
+      "name": "Botanical Eucalyptus Silk-Linen Scarf",
+      "category": "Accessories",
+      "price": 45.00,
+      "stock": 20,
+      "description": "Featherweight luxury scarf featuring natural leaf prints and hand-rolled borders.",
+      "sustainability_notes": "50% flax linen and 50% peace silk. Imprinted by hand using fallen eucalyptus leaves and clean rainwater."
+    },
+    {
+      "id": "GF-BEANIE-14",
+      "name": "Ribbed Upcycled Cotton Beanie",
+      "category": "Accessories",
+      "price": 28.00,
+      "stock": 35,
+      "description": "Warm cuffed fisherman beanie knit in a thick 2x2 rib stitch. One size fits most.",
+      "sustainability_notes": "100% post-industrial textile cutting scraps shredded and respun into premium yarn, preventing landfill waste."
+    },
+    {
+      "id": "GF-SOAP-15",
+      "name": "Botanical Olive & Hemp Bar Soap",
+      "category": "Wellness",
+      "price": 12.00,
+      "stock": 80,
+      "description": "Cold-processed artisan bath bar with organic lavender essential oil and soothing ground oats.",
+      "sustainability_notes": "Pure cold-pressed olive oil and organic cold-pressed raw hemp seed oil. Zero palm oil, wrapped in recycled seeded paper."
+    }
+  ],
+  "gift_bundles": [
+    {
+      "id": "GB-STARTER-01",
+      "name": "Eco Starter Kitchen & Home Bundle",
+      "price": 85.00,
+      "regular_value": 102.00,
+      "items": ["Artisan Flax Linen Kitchen Apron (GF-APRON-08)", "Waffle Weave Organic Bath Towel (GF-TOWEL-05)", "Botanical Olive & Hemp Bar Soap (GF-SOAP-15)"],
+      "description": "The perfect housewarming gift featuring our bestselling artisan linen apron, absorbent waffle towel, and botanical bar soap.",
+      "sustainability_notes": "Packed in a post-consumer recycled presentation box tied with wild thyme seed paper ribbon."
+    },
+    {
+      "id": "GB-COMFORT-02",
+      "name": "Cozy Hemp & Bamboo Lounge Bundle",
+      "price": 160.00,
+      "regular_value": 186.00,
+      "items": ["Himalayan Hemp Relaxed Hoodie (GF-HOOD-02)", "Normandy Linen Lounge Pants (GF-PANT-03)", "Bamboo Lyocell Cushioned Socks 3-Pack (GF-SOCK-04)"],
+      "description": "Complete head-to-toe sustainable relaxation set combining organic hemp warmth, flax linen breeziness, and bamboo cushioning.",
+      "sustainability_notes": "100% plastic-free, carbon-neutral shipping included."
+    },
+    {
+      "id": "GB-ZEROWASTE-03",
+      "name": "Zero-Waste Self-Care Gift Set",
+      "price": 45.00,
+      "regular_value": 54.00,
+      "items": ["Zero-Waste Organic Makeup Rounds 10-Pack (GF-PADS-12)", "Bamboo Lyocell Cushioned Socks 3-Pack (GF-SOCK-04)", "Botanical Olive & Hemp Bar Soap (GF-SOAP-15)"],
+      "description": "An accessible, earth-friendly self-care package with washable rounds, soft bamboo socks, and organic cold-processed soap.",
+      "sustainability_notes": "Replaces single-use plastics and disposables."
+    },
+    {
+      "id": "GB-LUXURY-04",
+      "name": "Pure Linen Sanctuary Sleep Bundle",
+      "price": 230.00,
+      "regular_value": 253.00,
+      "items": ["Flax Linen Duvet Cover Set (GF-BED-06)", "Herringbone Organic Cotton Throw (GF-BLANK-09)"],
+      "description": "Elevate your bedroom into an organic sanctuary with our Belgian flax linen queen duvet and handwoven herringbone throw.",
+      "sustainability_notes": "Thermoregulating natural flax and GOTS certified organic cotton."
+    }
+  ]
+}
