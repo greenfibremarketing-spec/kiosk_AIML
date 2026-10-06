@@ -1,7 +1,7 @@
 """Product catalog tools for Green Fibre AI Kiosk Agent.
 
 Provides verified product search, details, stock check, and gift bundle recommendations.
-The agent must only state prices and stock numbers obtained directly through these tools.
+Uses neutral tool return messages and cleanly separates 'not carried' from 'out of stock'.
 """
 
 import json
@@ -34,30 +34,29 @@ def search_products(query: str) -> str:
         query: Search term (e.g., 'linen pants', 'cotton tee', 'hoodie', 'socks', 'towel', 'soap').
         
     Returns:
-        JSON string list of matching products with id, name, category, price, and brief description.
+        JSON string list of matching products, or a neutral notice if not carried.
     """
     catalog = _load_catalog()
     products = catalog.get("products", [])
     q = query.lower().strip()
 
     matches = []
-    # If customer is explicitly searching for synthetic / petroleum fabrics, Green Fibre does not make them
+    # Neutral filtering for synthetic queries
     synthetic_keywords = ["nylon", "polyester", "acrylic", "fleece polyester", "synthetic jacket", "synthetic shirt"]
     if any(sk in q for sk in synthetic_keywords):
-        return f"No products found matching '{query}'. Green Fibre never produces synthetic or plastic garments."
+        return f"No products found matching '{query}'. This item is not carried in the Green Fibre catalog."
 
     for p in products:
         name_cat = f"{p.get('name', '')} {p.get('category', '')}".lower()
         desc = p.get('description', '').lower()
 
-        # Score name/category match higher
         if q in name_cat or all(word in name_cat for word in q.split() if len(word) > 2):
             matches.append(p)
         elif q in desc or any(word in name_cat for word in q.split() if len(word) > 3):
             matches.append(p)
 
     if not matches:
-        return f"No products found matching '{query}'. State honestly that we do not have this item in our catalog."
+        return f"No products found matching '{query}'. This item is not carried in the Green Fibre catalog."
 
     clean_results = [
         {
@@ -65,6 +64,7 @@ def search_products(query: str) -> str:
             "name": p["name"],
             "category": p["category"],
             "price": p["price"],
+            "stock": p.get("stock", 0),
             "description": p["description"],
         }
         for p in matches[:4]
@@ -90,18 +90,18 @@ def get_product_details(product_id: str) -> str:
         if p["id"].upper() == pid:
             return json.dumps(p, indent=2)
 
-    return f"Product with ID '{product_id}' was not found in the catalog. State honestly that it does not exist."
+    return f"Product '{product_id}' is not carried in the catalog."
 
 
 @tool
 def check_stock(product_id: str) -> str:
-    """Check verified inventory and available stock for a specific product ID.
+    """Check inventory availability and stock level for a product ID.
     
     Args:
         product_id: The unique product identifier (e.g., 'GF-TEE-01', 'GF-PANT-03').
         
     Returns:
-        Stock level and availability message. Never guess or state stock without calling this tool.
+        Neutral status string distinguishing in-stock, out of stock, or not carried.
     """
     catalog = _load_catalog()
     products = catalog.get("products", [])
@@ -110,12 +110,14 @@ def check_stock(product_id: str) -> str:
     for p in products:
         if p["id"].upper() == pid:
             stock = p.get("stock", 0)
+            name = p.get("name", "Product")
+            price = p.get("price", 0.0)
             if stock > 0:
-                return f"Product {p['name']} ({p['id']}) has {stock} units currently in stock."
+                return f"Product {name} ({pid}) is in stock with {stock} units available at ${price:.2f}."
             else:
-                return f"Product {p['name']} ({p['id']}) is currently out of stock."
+                return f"Product {name} ({pid}) is carried in our catalog but is currently out of stock."
 
-    return f"Product with ID '{product_id}' was not found in inventory."
+    return f"Product '{product_id}' is not carried in the catalog."
 
 
 @tool

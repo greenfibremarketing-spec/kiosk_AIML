@@ -1,34 +1,30 @@
 """RAG (Retrieval Augmented Generation) pipeline for Green Fibre Knowledge Base.
 
 Includes document loading, recursive text chunking, HuggingFace embeddings,
-FAISS vector indexing, and retrieval inspection helpers.
+FAISS vector indexing, distance threshold filtering, eager warmup, and retrieval tools.
 """
 
+import json
+import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
-# LangChain Document Loading
-# TextLoader: Reads text/markdown files preserving source metadata.
+# LangChain Document Loading & Text Splitting
 from langchain_community.document_loaders import TextLoader
-
-# LangChain Text Splitters
-# RecursiveCharacterTextSplitter: Recursively splits text by double-newlines, single-newlines,
-# and spaces to keep coherent paragraphs intact while honoring chunk size limits.
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Embeddings Integration
-# HuggingFaceEmbeddings: Modern standalone langchain-huggingface package generating
-# local dense vector representations using sentence-transformers/all-MiniLM-L6-v2.
+# Standalone embeddings package
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # Vector Store
-# FAISS: Facebook AI Similarity Search provides fast, file-persisted vector indexing
-# with zero background server overhead.
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_core.tools import tool
 
 from app.config import settings
 
+logger = logging.getLogger("green_fibre.rag")
 
 _embeddings_instance: Optional[HuggingFaceEmbeddings] = None
 _vector_store_instance: Optional[FAISS] = None
@@ -59,7 +55,6 @@ def load_knowledge_documents(knowledge_dir: Optional[str] = None) -> List[Docume
                 file_path = os.path.join(root, file)
                 loader = TextLoader(file_path, encoding="utf-8")
                 loaded = loader.load()
-                # Attach clean relative source path
                 for doc in loaded:
                     doc.metadata["source"] = os.path.relpath(file_path, dir_path)
                 documents.extend(loaded)
@@ -72,11 +67,7 @@ def split_documents(
     chunk_size: int = 400,
     chunk_overlap: int = 60,
 ) -> List[Document]:
-    """Split documents into voice-optimized concise chunks using RecursiveCharacterTextSplitter.
-    
-    Chunk size 400 with 60 overlap keeps individual knowledge concepts self-contained
-    for spoken responses without exceeding LLM context boundaries.
-    """
+    """Split documents into concise chunks using RecursiveCharacterTextSplitter."""
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -100,10 +91,7 @@ def build_vector_store(
     chunks = split_documents(documents)
     embeddings = get_embeddings()
 
-    # Index chunks into FAISS vector store
     vector_store = FAISS.from_documents(chunks, embeddings)
-
-    # Persist index to directory
     os.makedirs(target_path, exist_ok=True)
     vector_store.save_local(target_path)
 
@@ -122,7 +110,6 @@ def load_vector_store(save_path: Optional[str] = None) -> Optional[FAISS]:
     if not os.path.exists(target_path):
         return None
 
-    # Check if faiss index files exist
     index_file = os.path.join(target_path, "index.faiss")
     if not os.path.exists(index_file):
         return None
@@ -136,7 +123,8 @@ def load_vector_store(save_path: Optional[str] = None) -> Optional[FAISS]:
         )
         _vector_store_instance = vector_store
         return vector_store
-    except Exception:
+    except Exception as e:
+        logger.warning("Could not load local vector store: %s", e)
         return None
 
 
@@ -148,39 +136,102 @@ def get_vector_store() -> FAISS:
     return store
 
 
+def warmup_rag() -> Dict[str, float]:
+    """Eagerly load embeddings model and vector store at startup to prevent turn latency spikes.
+    
+    Returns a dictionary with cold startup timing in milliseconds.
+    """
+    t0 = time.time()
+    get_embeddings()
+    t_emb = time.time()
+    get_vector_store()
+    t_store = time.time()
+
+    emb_ms = (t_emb - t0) * 1000.0
+    store_ms = (t_store - t_emb) * 1000.0
+    total_ms = (t_store - t0) * 1000.0
+
+    logger.info(
+        "RAG warmup complete: embeddings=%.1fms, store=%.1fms, total=%.1fms",
+        emb_ms, store_ms, total_ms
+    )
+    return {
+        "embeddings_load_ms": round(emb_ms, 2),
+        "vector_store_load_ms": round(store_ms, 2),
+        "total_warmup_ms": round(total_ms, 2),
+    }
+
+
 def get_retriever(k: int = 3):
     """Obtain a LangChain VectorStoreRetriever configured for top-k nearest neighbors."""
     store = get_vector_store()
     return store.as_retriever(search_kwargs={"k": k})
 
 
-def retrieve_relevant_chunks(query: str, k: int = 3) -> List[Dict[str, Any]]:
-    """Retrieve top-k relevant chunks with similarity scores and metadata for inspection."""
+def retrieve_relevant_chunks(
+    query: str,
+    k: int = 3,
+    score_threshold: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieve top-k relevant chunks with similarity score filtering.
+    
+    Drops weak matches where score > score_threshold (default 1.2).
+    """
+    threshold = (
+        score_threshold if score_threshold is not None else settings.rag_score_threshold
+    )
     store = get_vector_store()
-    # similarity_search_with_score returns (Document, float_distance)
     results = store.similarity_search_with_score(query, k=k)
 
     chunks_data = []
     for doc, score in results:
+        score_val = float(score)
+        # Drop weak chunks where L2 distance exceeds threshold
+        if threshold is not None and score_val > threshold:
+            continue
         chunks_data.append({
             "content": doc.page_content,
             "source": doc.metadata.get("source", "unknown"),
-            "score": float(score),
+            "score": round(score_val, 4),
         })
     return chunks_data
 
 
-def print_retrieval_inspect(query: str, k: int = 3) -> None:
+def print_retrieval_inspect(
+    query: str,
+    k: int = 3,
+    score_threshold: Optional[float] = None,
+) -> None:
     """Print retrieved chunks in a readable, formatted view to inspect retrieval quality."""
-    chunks = retrieve_relevant_chunks(query, k=k)
+    chunks = retrieve_relevant_chunks(query, k=k, score_threshold=score_threshold)
+    thresh_val = score_threshold if score_threshold is not None else settings.rag_score_threshold
     print("=" * 75)
-    print(f"RETRIEVAL INSPECTION FOR QUERY: \"{query}\"")
-    print(f"Top {len(chunks)} chunks retrieved (lower distance score = higher relevance):")
+    print(f"RETRIEVAL INSPECTION FOR QUERY: \"{query}\" (Threshold: <= {thresh_val})")
+    print(f"Matching chunks retrieved: {len(chunks)}")
     print("=" * 75)
+    if not chunks:
+        print("  No chunks met the relevance threshold (distance > 1.2 dropped).")
     for i, chunk in enumerate(chunks, 1):
         print(f"\n[Chunk {i}] Source: {chunk['source']} | Score: {chunk['score']:.4f}")
         print("-" * 75)
-        # Indent content for clarity
         for line in chunk['content'].strip().split("\n"):
             print(f"  {line}")
     print("\n" + "=" * 75)
+
+
+@tool
+def search_knowledge(query: str) -> str:
+    """Search verified store policies, shipping rates, returns, materials, and brand information.
+    
+    Args:
+        query: Knowledge question or topic (e.g., 'return shipping', 'garment washing care', 'seed tags').
+        
+    Returns:
+        JSON string list of verified knowledge snippets, or a neutral not-found notice.
+    """
+    chunks = retrieve_relevant_chunks(query, k=2, score_threshold=settings.rag_score_threshold)
+    if not chunks:
+        return f"No verified store knowledge found matching '{query}'. State honestly that you do not have this information."
+
+    results = [{"source": c["source"], "text": c["content"]} for c in chunks]
+    return json.dumps(results, indent=2)

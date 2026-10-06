@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     products_file: str = "data/products.json"
     vector_store_path: str = "data/vector_store"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    rag_score_threshold: float = 1.2  # Chunks with distance > 1.2 are considered weak and dropped
+
+    # Agent Guardrails & Limits
+    agent_recursion_limit: int = 10
+    max_retry_wait_seconds: float = 3.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
