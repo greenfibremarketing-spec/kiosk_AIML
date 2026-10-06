@@ -1,6 +1,6 @@
 """Interactive terminal chat CLI for testing the Green Fibre AI Avatar Brain.
 
-Allows testing session memory, spoken persona, and guardrails directly in the terminal.
+Allows testing session memory, spoken persona, guardrails, and RAG chunk retrieval directly.
 """
 
 import os
@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import uuid
 from app.brain import ask_avatar
 from app.sessions import session_manager
+from app.rag import print_retrieval_inspect
 
 
 def main():
@@ -21,6 +22,7 @@ def main():
     print("=" * 65)
     print(f"Session ID : {session_id}")
     print("Commands   : '/reset' to clear memory | '/session <id>' to switch")
+    print("             '/chunks <query>' to inspect RAG retrieved chunks")
     print("             '/exit' to quit")
     print("=" * 65)
     print("Avatar is listening. Type your message below:\n")
@@ -47,7 +49,15 @@ def main():
                     print(f"[System] Switched to session: {session_id}\n")
                 continue
 
-            # Send message through the LangGraph brain with session memory
+            if user_input.startswith("/chunks "):
+                query = user_input[len("/chunks "):].strip()
+                if query:
+                    print_retrieval_inspect(query)
+                else:
+                    print("[System] Usage: /chunks <question or topic>\n")
+                continue
+
+            # Send message through the LangGraph brain with session memory & RAG
             spoken_text = ask_avatar(user_input, session_id=session_id)
             print(f"\nAvatar: {spoken_text}\n")
 

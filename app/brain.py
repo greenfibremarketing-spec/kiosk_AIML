@@ -1,9 +1,10 @@
 """LangChain & LangGraph brain for the Green Fibre AI Avatar Kiosk.
 
 Constructs the conversational engine using modern LangGraph StateGraph,
-spoken avatar guardrails, and thread-based memory checkpointing.
+spoken avatar guardrails, RAG retrieval context, and thread-based memory checkpointing.
 """
 
+import logging
 import re
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -12,7 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 # AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage: Standard message types.
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
-# ChatGeneration, ChatGenerationChunk, ChatResult: Response containers for chat model outputs.
+# ChatGeneration, ChatGenerationChunk, ChatResult: Containers for chat model generation results.
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # LangGraph imports
@@ -21,7 +22,9 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 
 from app.config import settings
 from app.sessions import session_manager
+from app.rag import retrieve_relevant_chunks
 
+logger = logging.getLogger("green_fibre.brain")
 
 # Spoken avatar guardrails in system prompt
 SYSTEM_PROMPT = """You are the friendly, voice-first AI avatar assistant at the Green Fibre kiosk.
@@ -36,8 +39,8 @@ STRICT VOICE & SPOKEN RULES:
 
 GUARDRAILS & BOUNDARIES:
 1. Stay focused exclusively on Green Fibre: products, sustainable materials, order status, shipping, returns, and brand mission.
-2. If asked about unrelated topics (such as politics, coding, general trivia, or competitors), politely decline: "I can only assist with Green Fibre products and questions."
-3. Never invent facts, prices, discounts, or stock levels. If you do not have verified information, honestly state that you do not know.
+2. If asked about unrelated topics (such as politics, coding, general trivia, or competitors), politely decline: "I can only assist with Green Fibre products and store policies."
+3. Never invent facts, prices, discounts, or stock levels. If you do not have verified information from the knowledge base, honestly state that you do not know.
 4. Never ask for or store sensitive personal information such as passwords, credit card numbers, or full payment details.
 """
 
@@ -78,7 +81,7 @@ def clean_spoken_text(text: str) -> str:
 class MockKioskChatModel(BaseChatModel):
     """Realistic offline fallback chat model for kiosk development and testing.
     
-    Generates spoken, concise, brand-aware responses without requiring an Anthropic API key.
+    Generates spoken, concise, brand-aware responses grounded in verified RAG knowledge.
     """
 
     def _generate(
@@ -89,11 +92,14 @@ class MockKioskChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         last_message = ""
-        for m in reversed(messages):
-            if isinstance(m, HumanMessage):
-                last_message = m.content.strip()
-                break
-        text = self._generate_response_text(last_message, messages)
+        system_context = ""
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                system_context += " " + str(m.content)
+            elif isinstance(m, HumanMessage):
+                last_message = str(m.content).strip()
+
+        text = self._generate_response_text(last_message, system_context)
         generation = ChatGeneration(message=AIMessage(content=text))
         return ChatResult(generations=[generation])
 
@@ -105,11 +111,14 @@ class MockKioskChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         last_message = ""
-        for m in reversed(messages):
-            if isinstance(m, HumanMessage):
-                last_message = m.content.strip()
-                break
-        full_text = self._generate_response_text(last_message, messages)
+        system_context = ""
+        for m in messages:
+            if isinstance(m, SystemMessage):
+                system_context += " " + str(m.content)
+            elif isinstance(m, HumanMessage):
+                last_message = str(m.content).strip()
+
+        full_text = self._generate_response_text(last_message, system_context)
         # Yield word-by-word with spaces to emulate realistic token streaming
         words = full_text.split(" ")
         for i, word in enumerate(words):
@@ -119,36 +128,51 @@ class MockKioskChatModel(BaseChatModel):
                 run_manager.on_llm_new_token(chunk_text)
             yield chunk
 
-    def _generate_response_text(self, query: str, history: List[BaseMessage]) -> str:
+    def _generate_response_text(self, query: str, context: str) -> str:
         q = query.lower()
+
+        # Off-topic guardrail checks
+        if any(w in q for w in ["python", "code", "weather", "president", "math", "bitcoin"]):
+            return "I can only assist with Green Fibre products and store policies."
+
         # Greetings
         if any(w in q for w in ["hi", "hello", "hey", "good morning", "good afternoon"]):
             return "Hello! Welcome to Green Fibre. How can I help you discover our eco-friendly collection today?"
 
-        # Off-topic checks
-        if any(w in q for w in ["python", "code", "weather", "president", "math", "bitcoin"]):
-            return "I can only assist with Green Fibre products, sustainable materials, and store policies."
-
-        # Brand / Mission
-        if any(w in q for w in ["brand", "story", "mission", "green fibre", "who are you"]):
-            return "Green Fibre is dedicated to sustainable living with garments and home essentials made from organic cotton, linen, hemp, and bamboo."
-
-        # Shipping & returns
-        if "shipping" in q or "delivery" in q:
-            return "We provide carbon-neutral shipping on all orders, with free delivery on purchases over fifty dollars."
+        # Returns and refunds (grounded in shipping_returns.md)
         if "return" in q or "refund" in q:
-            return "You can return any unworn item within thirty days for a full refund or exchange using our prepaid eco-mailer."
+            return "You can return any unworn, unwashed item within thirty days for a full refund. Return shipping is completely free with a digital QR code."
 
-        # Default fallback
-        return "Thanks for asking about that. We are happy to help you explore our sustainable collection. Is there a specific item you are looking for?"
+        # Shipping and delivery (grounded in shipping_returns.md)
+        if "shipping" in q or "delivery" in q or "how long" in q:
+            return "Standard carbon-neutral shipping takes three to five business days and is free on orders over fifty dollars. Express delivery takes one to two business days for nine dollars and ninety-nine cents."
+
+        # Garment care / washing (grounded in faq.md)
+        if "wash" in q or "care" in q or "clean" in q:
+            return "We recommend washing in cold water at thirty degrees Celsius on a gentle cycle with plant-based detergent, then line drying to preserve the fibers."
+
+        # Materials / Fabrics (grounded in brand_story.md)
+        if "material" in q or "cotton" in q or "linen" in q or "hemp" in q or "bamboo" in q:
+            return "We craft all pieces exclusively from GOTS-certified organic cotton, European flax linen, Himalayan organic hemp, and closed-loop bamboo lyocell."
+
+        # Hangtags / Seeds (grounded in brand_story.md)
+        if "seed" in q or "tag" in q or "plant" in q:
+            return "Every price tag is embedded with non-GMO wildflower and thyme seeds that you can plant directly in soil to grow garden blooms."
+
+        # Brand / Origins (grounded in brand_story.md)
+        if "founder" in q or "origin" in q or "who started" in q:
+            return "Green Fibre was founded in 2021 by textile designers Elena Vance and Marcus Chen in Portland, Oregon."
+
+        # Gift wrap (grounded in faq.md)
+        if "gift" in q or "wrap" in q:
+            return "We offer biodegradable seed paper gift wrapping for four dollars and ninety-nine cents, or reusable organic cotton furoshiki wraps for nine dollars and ninety-nine cents."
+
+        # Default fallback: strictly honest
+        return "I don't have that specific information in my store records. May I help you with another question about our products or policies?"
 
     @property
     def _llm_type(self) -> str:
         return "mock-kiosk-chat-model"
-
-
-import logging
-logger = logging.getLogger("green_fibre.brain")
 
 
 def get_llm() -> BaseChatModel:
@@ -180,16 +204,42 @@ def get_llm() -> BaseChatModel:
 
 
 def create_kiosk_graph():
-    """Create the conversational LangGraph state machine.
+    """Create the conversational LangGraph state machine with RAG knowledge grounding.
     
-    Uses MessagesState to store conversation history and session_manager.checkpointer
-    for thread-based persistence keyed by session_id.
+    Uses MessagesState to store conversation history, retrieves verified chunks from FAISS,
+    and uses session_manager.checkpointer for thread-based persistence keyed by session_id.
     """
     llm = get_llm()
 
     def call_model(state: MessagesState) -> Dict[str, List[BaseMessage]]:
-        # Prepend system prompt to the messages sent to the model
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        # Extract user's latest query for RAG retrieval
+        user_query = ""
+        for m in reversed(state["messages"]):
+            if isinstance(m, HumanMessage):
+                user_query = str(m.content)
+                break
+
+        # Retrieve relevant verified knowledge chunks
+        rag_context = ""
+        if user_query:
+            try:
+                chunks = retrieve_relevant_chunks(user_query, k=2)
+                if chunks:
+                    context_lines = [f"[{c['source']}]: {c['content']}" for c in chunks]
+                    rag_context = "\n\n".join(context_lines)
+            except Exception as e:
+                logger.debug("RAG retrieval skipped or failed: %s", e)
+
+        # Assemble system prompt with RAG grounding
+        system_content = SYSTEM_PROMPT
+        if rag_context:
+            system_content += (
+                f"\n\nVERIFIED KNOWLEDGE BASE CONTEXT:\n{rag_context}\n\n"
+                "Use the above verified facts to formulate your spoken answer. "
+                "Keep it to 1 to 3 spoken sentences without markdown."
+            )
+
+        messages = [SystemMessage(content=system_content)] + state["messages"]
         response = llm.invoke(messages)
         return {"messages": [response]}
 
