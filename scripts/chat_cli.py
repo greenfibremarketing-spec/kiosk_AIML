@@ -1,8 +1,10 @@
 """Interactive terminal chat CLI for testing the Green Fibre AI Avatar Brain.
 
-Allows testing session memory, spoken persona, guardrails, and RAG chunk retrieval directly.
+Supports session memory, spoken persona, guardrails, RAG chunks inspection,
+and real-time turn tracing via the --trace flag or /trace command.
 """
 
+import argparse
 import os
 import sys
 
@@ -11,17 +13,32 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import uuid
 from app.brain import ask_avatar
-from app.sessions import session_manager
+from app.callbacks import TraceCallbackHandler
+from app.config import settings
 from app.rag import print_retrieval_inspect
+from app.sessions import session_manager
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Green Fibre AI Avatar Kiosk CLI")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Print detailed execution trace (latency, provider/model, RAG chunks, tools) for each turn",
+    )
+    args = parser.parse_args()
+
+    show_trace = args.trace
     session_id = f"cli-{uuid.uuid4().hex[:6]}"
+    trace_handler = TraceCallbackHandler() if show_trace else None
+
     print("=" * 65)
     print("  GREEN FIBRE AI AVATAR KIOSK - CLI CHAT")
     print("=" * 65)
     print(f"Session ID : {session_id}")
-    print("Commands   : '/reset' to clear memory | '/session <id>' to switch")
+    print(f"LLM Provider: {settings.llm_provider.upper()} ({settings.active_model_name})")
+    print(f"Tracing    : {'ENABLED' if show_trace else 'DISABLED'} (toggle with '/trace')")
+    print("Commands   : '/reset' to clear memory | '/trace' to toggle trace")
     print("             '/chunks <query>' to inspect RAG retrieved chunks")
     print("             '/exit' to quit")
     print("=" * 65)
@@ -42,6 +59,12 @@ def main():
                 print(f"[System] Memory cleared for session: {session_id}\n")
                 continue
 
+            if user_input.lower() == "/trace":
+                show_trace = not show_trace
+                trace_handler = TraceCallbackHandler() if show_trace else None
+                print(f"[System] Trace reporting: {'ENABLED' if show_trace else 'DISABLED'}\n")
+                continue
+
             if user_input.startswith("/session "):
                 parts = user_input.split(" ", 1)
                 if len(parts) > 1 and parts[1].strip():
@@ -57,9 +80,17 @@ def main():
                     print("[System] Usage: /chunks <question or topic>\n")
                 continue
 
-            # Send message through the LangGraph brain with session memory & RAG
-            spoken_text = ask_avatar(user_input, session_id=session_id)
+            # Send message through the LangGraph brain with session memory & optional trace
+            spoken_text = ask_avatar(
+                user_input,
+                session_id=session_id,
+                trace_handler=trace_handler,
+            )
             print(f"\nAvatar: {spoken_text}\n")
+
+            if show_trace and trace_handler:
+                print(trace_handler.render_trace())
+                print()
 
         except (KeyboardInterrupt, EOFError):
             print("\n\nAvatar: Goodbye! Have a green day.")

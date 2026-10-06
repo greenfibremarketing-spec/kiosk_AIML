@@ -1,7 +1,7 @@
 """Application configuration management using pydantic-settings.
 
 Loads environment variables from `.env` file with default fallbacks.
-Supports dynamic switching of models, timeouts, CORS origins, and explicit mock mode.
+Supports selectable LLM providers (groq, anthropic, mock), timeouts, CORS origins, and RAG paths.
 """
 
 import logging
@@ -14,12 +14,16 @@ logger = logging.getLogger("green_fibre.config")
 class Settings(BaseSettings):
     """Central configuration for Green Fibre AI Kiosk backend."""
 
-    # LLM Settings
+    # Selectable LLM Provider: 'groq' | 'anthropic' | 'mock'
+    llm_provider: str = "mock"
+
+    # Groq Settings
+    groq_api_key: Optional[str] = None
+    groq_model_name: str = "llama-3.3-70b-versatile"
+
+    # Anthropic Settings
     anthropic_api_key: Optional[str] = None
     model_name: str = "claude-3-5-sonnet-20241022"
-
-    # Explicit Mock Mode: set to True to use MockKioskChatModel explicitly
-    use_mock_llm: bool = False
 
     # Session & Memory
     session_idle_timeout_seconds: int = 120
@@ -47,6 +51,16 @@ class Settings(BaseSettings):
         if not self.cors_origins:
             return ["*"]
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def active_model_name(self) -> str:
+        """Return the active model identifier based on the selected provider."""
+        provider = self.llm_provider.lower().strip()
+        if provider == "groq":
+            return self.groq_model_name
+        if provider == "anthropic":
+            return self.model_name
+        return "mock-kiosk-model"
 
 
 # Singleton settings instance
