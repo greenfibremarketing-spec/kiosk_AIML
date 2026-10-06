@@ -1,0 +1,23 @@
+# Core Web & API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# LangChain & AI
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-anthropic>=0.3.0
+langgraph>=0.2.0
+
+# RAG & Embeddings
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+
+# Testing & Utilities
+httpx>=0.25.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
