@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Groq Settings
     groq_api_key: Optional[str] = None
-    groq_model_name: str = "llama-3.3-70b-versatile"
+    groq_model_name: str = "qwen/qwen3.8-27b"
 
     # Anthropic Settings
     anthropic_api_key: Optional[str] = None
