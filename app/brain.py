@@ -147,24 +147,36 @@ class MockKioskChatModel(BaseChatModel):
         return "mock-kiosk-chat-model"
 
 
+import logging
+logger = logging.getLogger("green_fibre.brain")
+
+
 def get_llm() -> BaseChatModel:
     """Instantiate the configured LangChain chat model.
     
-    Uses ChatAnthropic if an API key is available and mock mode is not forced;
-    otherwise falls back to MockKioskChatModel.
+    If settings.use_mock_llm is True, logs a prominent startup warning and uses MockKioskChatModel.
+    If False, instantiates ChatAnthropic with the API key from settings or raises an informative error.
     """
-    if not settings.is_mock_enabled and settings.anthropic_api_key:
-        try:
-            from langchain_anthropic import ChatAnthropic
-            # ChatAnthropic: Modern LangChain wrapper for Anthropic's Claude models.
-            return ChatAnthropic(
-                model=settings.model_name,
-                anthropic_api_key=settings.anthropic_api_key,
-                temperature=0.3,
-            )
-        except Exception:
-            return MockKioskChatModel()
-    return MockKioskChatModel()
+    if settings.use_mock_llm:
+        logger.warning("=" * 70)
+        logger.warning("[WARNING] USE_MOCK_LLM is enabled. Using MockKioskChatModel.")
+        logger.warning("          Responses are simulated for local offline development.")
+        logger.warning("=" * 70)
+        return MockKioskChatModel()
+
+    if not settings.anthropic_api_key or "your_" in settings.anthropic_api_key.lower():
+        raise ValueError(
+            "USE_MOCK_LLM is set to false, but ANTHROPIC_API_KEY is missing or contains a placeholder. "
+            "Please configure a valid ANTHROPIC_API_KEY in .env, or set USE_MOCK_LLM=true to run in mock mode."
+        )
+
+    from langchain_anthropic import ChatAnthropic
+    logger.info("Initializing live Claude LLM: %s", settings.model_name)
+    return ChatAnthropic(
+        model=settings.model_name,
+        anthropic_api_key=settings.anthropic_api_key,
+        temperature=0.3,
+    )
 
 
 def create_kiosk_graph():

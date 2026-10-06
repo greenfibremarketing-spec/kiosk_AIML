@@ -1,11 +1,14 @@
 """Application configuration management using pydantic-settings.
 
 Loads environment variables from `.env` file with default fallbacks.
-Supports dynamic switching of models, timeouts, CORS origins, and RAG paths.
+Supports dynamic switching of models, timeouts, CORS origins, and explicit mock mode.
 """
 
+import logging
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("green_fibre.config")
 
 
 class Settings(BaseSettings):
@@ -14,6 +17,9 @@ class Settings(BaseSettings):
     # LLM Settings
     anthropic_api_key: Optional[str] = None
     model_name: str = "claude-3-5-sonnet-20241022"
+
+    # Explicit Mock Mode: set to True to use MockKioskChatModel explicitly
+    use_mock_llm: bool = False
 
     # Session & Memory
     session_idle_timeout_seconds: int = 120
@@ -29,9 +35,6 @@ class Settings(BaseSettings):
     vector_store_path: str = "data/vector_store"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # Offline / Fallback Mock Mode
-    mock_llm: str = "auto"  # 'auto', 'true', or 'false'
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -44,16 +47,6 @@ class Settings(BaseSettings):
         if not self.cors_origins:
             return ["*"]
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-
-    @property
-    def is_mock_enabled(self) -> bool:
-        """Determine whether Mock LLM mode should be active."""
-        if self.mock_llm.lower() == "true":
-            return True
-        if self.mock_llm.lower() == "auto":
-            # Auto-enable mock mode if Anthropic API key is missing or dummy
-            return not self.anthropic_api_key or "your_" in self.anthropic_api_key.lower()
-        return False
 
 
 # Singleton settings instance
