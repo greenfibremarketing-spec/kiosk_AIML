@@ -1,1 +1,1 @@
-"""Green Fibre AI Avatar Kiosk Backend Package."""
+"""Greenie AI Avatar Kiosk Backend Package."""

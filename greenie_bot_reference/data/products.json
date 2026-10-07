@@ -1,0 +1,6 @@
+[
+  {"id":"viora-bottle","name":"Viora Eco Bottle","category":"Drinkware","price":649,"mrp":799,"in_stock":true,"description":"Sage-green bottle with a wood-look cap and carry loop, made from upcycled rice-husk biocomposite."},
+  {"id":"statement-mug","name":"Statement Ceramic-Feel Mug","category":"Drinkware","price":399,"mrp":499,"in_stock":true,"description":"Ceramic-like mug made from upcycled rice-husk biocomposite."},
+  {"id":"origin-tumbler","name":"Origin Travel Tumbler","category":"Drinkware","price":749,"mrp":899,"in_stock":true,"description":"Travel tumbler for commuting, made from upcycled rice-husk biocomposite."},
+  {"id":"flora-bowl","name":"Flora Soup & Salad Bowl","category":"Kitchen & Dining","price":549,"mrp":699,"in_stock":true,"description":"Roomy earthy-toned bowl for soups and salads, made from upcycled rice-husk biocomposite."}
+]

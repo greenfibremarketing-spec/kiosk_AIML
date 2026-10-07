@@ -1,4 +1,4 @@
-"""Knowledge base ingestion script for Green Fibre AI Kiosk.
+"""Knowledge base ingestion script for Greenie AI Kiosk.
 
 Builds or rebuilds the FAISS vector store index from markdown documents in data/knowledge/.
 Also supports interactive query inspection via the `--inspect` flag.
@@ -26,7 +26,7 @@ from app.rag import (
 
 def run_ingest():
     print("=" * 65)
-    print("  GREEN FIBRE - KNOWLEDGE BASE INGESTION")
+    print("  GREENIE - KNOWLEDGE BASE INGESTION")
     print("=" * 65)
     print(f"Knowledge Dir      : {settings.knowledge_dir}")
     print(f"Vector Store Path  : {settings.vector_store_path}")

@@ -1,23 +1,21 @@
-# Green Fibre Shipping & Returns Policy
+# Greenie Shipping & Returns Policy
 
-## Carbon-Neutral Delivery
-All Green Fibre deliveries are 100% carbon neutral. We partner with electric delivery couriers in urban zones and invest in verified reforestation projects for long-haul routes.
+## Eco-Conscious Shipping Across India
+All Greenie orders are dispatched in 100% plastic-free, recyclable packaging cushioned with honeycomb kraft paper and sealed with natural water-activated paper tape.
 
-### Shipping Rates and Speeds
-- **Standard Ground Shipping**: Delivery takes 3 to 5 business days. Free for all orders of $50 or more. For orders under $50, standard shipping is a flat rate of $4.99.
-- **Express Carbon-Offset Shipping**: Delivery takes 1 to 2 business days. Available for a flat rate of $9.99 on any order.
-- **In-Store Kiosk Pickup**: Free same-day pickup is available at any Green Fibre retail kiosk for orders placed before 2:00 PM local time.
+### Shipping Rates & Timelines
+- **Standard Delivery**: Arrives within 3 to 5 business days. Free on all orders above ₹499. For orders below ₹499, a flat shipping fee of ₹49 applies.
+- **Express Delivery**: Arrives within 1 to 2 business days in major metro cities for a flat rate of ₹99.
+- **Instant Kiosk Pickup**: Customers can purchase and collect in-stock items directly at this kiosk with zero wait time and zero shipping fees.
 
-## 30-Day Hassle-Free Returns
-We want you to love your sustainable pieces. If something isn't right, you may return it within 30 days of the delivery date.
+## 7-Day Hassle-Free Returns & Replacements
+We stand behind the craftsmanship and durability of our rice-husk biocomposite products. If an item arrives damaged, defective, or does not meet your expectations, you may return or exchange it within 7 days of delivery.
 
-### Return Conditions
-- Items must be unworn, unwashed, and undamaged.
-- Original plantable seed tags must remain attached.
-- Due to hygiene standards, intimate apparel and reusable organic facial pads cannot be returned unless defective.
+### Return Eligibility Conditions
+- Products must be unused, unwashed, and in their original packaging.
+- In the rare event of transit damage, share a photo of the item and packaging within 48 hours of delivery.
 
-### How to Initiate a Return
-1. Request a digital return QR code online or at this kiosk by providing your order number.
-2. No printer is needed. Simply show the QR code at your nearest post office or drop-off locker.
-3. Return postage is completely free of charge.
-4. Once our eco-fulfillment center inspects the item, your refund is credited to your original payment method within 3 to 5 business days.
+### How to Initiate a Return or Replacement
+1. Scan the digital return QR code at this kiosk or contact customer support via WhatsApp or email at support@greenie.eco with your order ID.
+2. Our courier partner will arrange a doorstep pickup at no cost to you.
+3. Once received and inspected at our fulfillment hub, your refund will be credited to your original payment method within 3 to 5 business days, or a replacement will be dispatched immediately.

@@ -1,4 +1,4 @@
-"""Session management and state persistence for the Green Fibre kiosk.
+"""Session management and state persistence for the Greenie kiosk.
 
 Provides per-session tracking with configurable idle timeouts and thread resets
 using LangGraph's native MemorySaver checkpointing.

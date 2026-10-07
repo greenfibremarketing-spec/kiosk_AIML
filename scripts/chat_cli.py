@@ -1,4 +1,4 @@
-"""Interactive terminal chat CLI for testing the Green Fibre AI Avatar Brain.
+"""Interactive terminal chat CLI for testing the Greenie AI Avatar Brain.
 
 Supports session memory, spoken persona, guardrails, RAG chunks inspection,
 and real-time turn tracing via the --trace flag or /trace command.
@@ -20,7 +20,7 @@ from app.sessions import session_manager
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Green Fibre AI Avatar Kiosk CLI")
+    parser = argparse.ArgumentParser(description="Greenie AI Avatar Kiosk CLI")
     parser.add_argument(
         "--trace",
         action="store_true",
@@ -33,7 +33,7 @@ def main():
     trace_handler = TraceCallbackHandler() if show_trace else None
 
     print("=" * 65)
-    print("  GREEN FIBRE AI AVATAR KIOSK - CLI CHAT")
+    print("  GREENIE AI AVATAR KIOSK - CLI CHAT")
     print("=" * 65)
     print(f"Session ID : {session_id}")
     print(f"LLM Provider: {settings.llm_provider.upper()} ({settings.active_model_name})")
@@ -51,7 +51,7 @@ def main():
                 continue
 
             if user_input.lower() in ["/exit", "exit", "quit", "q"]:
-                print("\nAvatar: Thank you for visiting Green Fibre! Have a wonderful day.")
+                print("\nAvatar: Thank you for visiting Greenie! Have a wonderful day.")
                 break
 
             if user_input.lower() == "/reset":

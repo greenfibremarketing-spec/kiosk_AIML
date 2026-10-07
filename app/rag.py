@@ -1,4 +1,4 @@
-"""RAG (Retrieval Augmented Generation) pipeline for Green Fibre Knowledge Base.
+"""RAG (Retrieval Augmented Generation) pipeline for Greenie Knowledge Base.
 
 Includes document loading, recursive text chunking, HuggingFace embeddings,
 FAISS vector indexing, distance threshold filtering, eager warmup, and retrieval tools.
@@ -24,7 +24,7 @@ from langchain_core.tools import tool
 
 from app.config import settings
 
-logger = logging.getLogger("green_fibre.rag")
+logger = logging.getLogger("greenie.rag")
 
 _embeddings_instance: Optional[HuggingFaceEmbeddings] = None
 _vector_store_instance: Optional[FAISS] = None

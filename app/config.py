@@ -8,11 +8,11 @@ import logging
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-logger = logging.getLogger("green_fibre.config")
+logger = logging.getLogger("greenie.config")
 
 
 class Settings(BaseSettings):
-    """Central configuration for Green Fibre AI Kiosk backend."""
+    """Central configuration for Greenie AI Kiosk backend."""
 
     # Selectable LLM Provider: 'groq' | 'anthropic' | 'mock'
     llm_provider: str = "mock"
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # API & CORS
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 5007
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
     # RAG & Knowledge Paths

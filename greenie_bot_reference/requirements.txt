@@ -1,0 +1,5 @@
+langchain>=1.0
+langchain-anthropic
+langgraph
+fastapi
+uvicorn
