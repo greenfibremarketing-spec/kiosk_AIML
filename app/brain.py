@@ -612,3 +612,23 @@ def ask_avatar(
     finally:
         if trace_handler:
             trace_handler.end_turn()
+
+
+def ask_avatar_stream(
+    message: str,
+    session_id: str,
+) -> Iterator[str]:
+    """Stream the avatar's reply as word-level tokens.
+
+    Runs the full ask_avatar pipeline (tools, RAG, validation) then yields
+    each word as a token so the WebSocket endpoint can push them in real time.
+    This preserves all factual validation and tool-calling guardrails.
+
+    Yields:
+        str: Individual word tokens with trailing space, e.g. "Hello ", "there! "
+    """
+    reply = ask_avatar(message=message, session_id=session_id)
+    words = reply.split(" ")
+    for i, word in enumerate(words):
+        # Last word has no trailing space
+        yield word if i == len(words) - 1 else word + " "
