@@ -7,6 +7,7 @@ Supports selectable LLM providers (groq, anthropic, mock), timeouts, CORS origin
 import logging
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 logger = logging.getLogger("greenie.config")
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     # API & CORS
     host: str = "0.0.0.0"
     port: int = 5007
+    max_message_chars: int = Field(default=4000, ge=1, le=100000)
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
     # RAG & Knowledge Paths

@@ -1,181 +1,98 @@
-"""Product catalog tools for Greenie AI Kiosk Agent.
-
-Provides verified product search, details, stock check, and gift bundle recommendations.
-Uses neutral tool return messages and cleanly separates 'not carried' from 'out of stock'.
-"""
+"""Read-only product tools; keep legacy tool names and argument contracts."""
 
 import json
-import os
-from typing import Any, Dict, List, Optional
+import re
+from decimal import Decimal
+from typing import Optional
 from langchain_core.tools import tool
-
 from app.config import settings
+from app.product_repository import (
+    JsonProductRepository, ProductRepository, is_active, product_view, valid_price,
+)
 
-_products_data_cache: Optional[Dict[str, Any]] = None
+
+def get_product_repository() -> ProductRepository:
+    """Dependency boundary for a later verified business-service adapter."""
+    return JsonProductRepository(settings.products_file)
 
 
-def _load_catalog() -> Dict[str, Any]:
-    """Load and cache products and bundles from products.json."""
-    global _products_data_cache
-    if _products_data_cache is None:
-        file_path = settings.products_file
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Products file not found at: {file_path}")
-        with open(file_path, "r", encoding="utf-8") as f:
-            _products_data_cache = json.load(f)
-    return _products_data_cache
+def _load_catalog() -> dict:
+    """Retain the legacy /products catalogue shape."""
+    return get_product_repository().catalog()
 
 
 def clear_catalog_cache() -> None:
-    """Clear memory cache when products.json is reloaded."""
-    global _products_data_cache
-    _products_data_cache = None
+    """Compatibility hook; the JSON adapter now reads fresh snapshots on each call."""
 
 
 @tool
-def search_products(query: str = "", category: str = "", max_price: float = 0.0) -> str:
-    """Search for Greenie eco-friendly products by name, keyword, category, or max price in INR.
-    
-    Args:
-        query: Search term (e.g., 'mug', 'bottle', 'tumbler', 'bowl', 'drinkware').
-        category: Optional category filter (e.g., 'Drinkware', 'Kitchen & Dining', 'Desk & Office', 'Corporate Gifts').
-        max_price: Optional maximum price in INR (e.g., 500, 800, 1000). Set to 0 for no price limit.
-        
-    Returns:
-        JSON string list of matching products, or a neutral notice if not carried.
+def search_products(query: str = '', category: str = '', max_price: float = 0.0) -> str:
+    """Search active catalogue products. Null price/stock means unknown.
+
+    max_price is in INR; zero means no budget filter. Snapshot prices require
+    confirmation before checkout. This tool does not verify certifications.
     """
-    catalog = _load_catalog()
-    products = catalog.get("products", [])
-    q = (query or "").lower().strip()
-    cat_filter = (category or "").lower().strip()
-
-    # Neutral filtering for synthetic or plastic items not carried
-    synthetic_keywords = ["plastic", "melamine", "nylon", "polyester", "acrylic", "styrofoam", "leather", "disposable"]
-    if any(sk in q for sk in synthetic_keywords):
-        return f"No products found matching '{query}'. This item is not carried in the Greenie catalog. Greenie exclusively crafts sustainable lifestyle essentials from 100% upcycled rice-husk biocomposite."
-
+    if not valid_price(max_price):
+        return 'Please provide a finite, non-negative budget.'
+    stopwords = {'a', 'an', 'the', 'do', 'you', 'have', 'sell', 'show', 'me',
+                 'what', 'is', 'of', 'for', 'please', 'price', 'cost', 'much', 'how'}
+    words = [w for w in re.findall(r'\w+', query.lower()) if len(w) > 1 and w not in stopwords]
     matches = []
-    for p in products:
-        name_cat = f"{p.get('name', '')} {p.get('category', '')}".lower()
-        desc = p.get('description', '').lower()
-        material = p.get('sustainability_notes', '').lower()
-        full_text = f"{name_cat} {desc} {material}"
-
-        if q and not any(word in full_text for word in q.split() if len(word) > 1):
+    for product in get_product_repository().products():
+        if not is_active(product):
             continue
-
-        if cat_filter and cat_filter not in p.get("category", "").lower():
+        text = ' '.join(str(product.get(k, '')) for k in ('name', 'category', 'description')).lower()
+        if words and not any(word in text for word in words):
             continue
-
-        if max_price > 0 and p.get("price", 0) > max_price:
+        if category and category.lower().strip() not in str(product.get('category', '')).lower():
             continue
-
-        matches.append(p)
-
-    if not matches:
-        criteria = f"'{query}'" if query else "the specified criteria"
-        return f"No products found matching {criteria}. This item is not carried in the Greenie catalog."
-
-    clean_results = [
-        {
-            "id": p["id"],
-            "name": p["name"],
-            "category": p["category"],
-            "price": p["price"],
-            "mrp": p.get("mrp", p["price"]),
-            "stock": p.get("stock", 1 if p.get("in_stock", True) else 0),
-            "in_stock": p.get("in_stock", True),
-            "description": p["description"],
-        }
-        for p in matches[:5]
-    ]
-    return json.dumps(clean_results, indent=2)
+        price = product.get('price')
+        if max_price > 0 and (not valid_price(price) or Decimal(str(price)) > Decimal(str(max_price))):
+            continue
+        matches.append(product_view(product))
+    return json.dumps(matches[:5]) if matches else 'No matching active products were found in the catalogue.'
 
 
 @tool
 def get_product_details(product_id: str) -> str:
-    """Retrieve complete verified details for a specific product by its ID or exact name.
-    
-    Args:
-        product_id: The unique product identifier (e.g., 'viora-bottle', 'statement-mug', 'origin-tumbler', 'flora-bowl').
-        
-    Returns:
-        JSON string with name, price, MRP, stock, description, and sustainability notes.
-    """
-    catalog = _load_catalog()
-    products = catalog.get("products", [])
-    pid = product_id.lower().strip()
-
-    for p in products:
-        if p["id"].lower() == pid or pid in p["name"].lower():
-            return json.dumps(p, indent=2)
-
-    return f"Product '{product_id}' is not carried in the catalog."
+    """Get product facts by exact ID, SKU or name. Unknown data is never invented."""
+    product = get_product_repository().get(product_id)
+    if product is None:
+        return 'Product is not available in the catalogue.'
+    return json.dumps(product_view(product))
 
 
 @tool
 def check_stock(product_id: str) -> str:
-    """Check inventory availability and stock level for a product ID or product name.
-    
-    Args:
-        product_id: The unique product identifier (e.g., 'viora-bottle', 'statement-mug', 'origin-tumbler', 'flora-bowl').
-        
-    Returns:
-        Neutral status string distinguishing in-stock, out of stock, or not carried.
-    """
-    catalog = _load_catalog()
-    products = catalog.get("products", [])
-    pid = product_id.lower().strip()
-
-    for p in products:
-        if p["id"].lower() == pid or pid in p["name"].lower():
-            stock = p.get("stock", 0)
-            in_stock = p.get("in_stock", stock > 0)
-            name = p.get("name", "Product")
-            price = p.get("price", 0)
-            if in_stock and stock > 0:
-                return f"Product {name} ({p['id']}) is in stock with {stock} units available at ₹{price}."
-            elif in_stock:
-                return f"Product {name} ({p['id']}) is in stock at ₹{price}."
-            else:
-                return f"Product {name} ({p['id']}) is carried in our catalog but is currently out of stock."
-
-    return f"Product '{product_id}' is not carried in the catalog."
+    """Check exact SKU availability; missing, stale or conflicting stock is unknown."""
+    product = get_product_repository().get(product_id)
+    if product is None:
+        return 'Product is not available in the catalogue.'
+    view = product_view(product)
+    name = view['name']
+    if view['stock_status'] == 'inactive':
+        return f'{name} is inactive and cannot currently be recommended.'
+    if view['stock_status'] == 'unknown':
+        return f'Current stock for {name} is unknown. Please confirm availability with a store associate.'
+    if view['stock_status'] == 'out_of_stock':
+        return f'{name} is currently out of stock.'
+    return f'{name} is in stock with {view["stock"]} units available.'
 
 
 @tool
 def get_gift_bundles(budget: Optional[float] = None) -> str:
-    """Find curated eco-friendly gift bundles and corporate hampers, optionally filtered by maximum budget in INR.
-    
-    Args:
-        budget: Optional maximum budget amount in INR (e.g., 1000, 1500, 2000).
-        
-    Returns:
-        JSON string list of suitable gift bundles with pricing in INR, included items, and savings.
-    """
-    catalog = _load_catalog()
-    bundles = catalog.get("gift_bundles", [])
-
-    results = []
-    for b in bundles:
-        if budget is None or b.get("price", 0) <= budget:
-            results.append({
-                "id": b["id"],
-                "name": b["name"],
-                "price": b["price"],
-                "mrp": b.get("mrp"),
-                "regular_value": b.get("regular_value"),
-                "items": b["items"],
-                "description": b["description"],
-            })
-
-    if not results:
-        if budget is not None:
-            return f"No gift bundles found within budget of ₹{int(budget)}. The lowest price bundle is ₹949."
-        return "No gift bundles currently available."
-
-    return json.dumps(results, indent=2)
+    """Find active gift bundles with known catalogue prices within an INR budget."""
+    if budget is not None and not valid_price(budget):
+        return 'Please provide a finite, non-negative budget.'
+    bundles = []
+    for bundle in get_product_repository().bundles():
+        if not is_active(bundle) or not valid_price(bundle.get('price')):
+            continue
+        if budget is not None and Decimal(str(bundle['price'])) > Decimal(str(budget)):
+            continue
+        bundles.append({**product_view(bundle), 'items': bundle.get('items', []),
+                        'regular_value': bundle.get('regular_value') if valid_price(bundle.get('regular_value')) else None})
+    return json.dumps(bundles) if bundles else 'No active gift bundles with known catalogue pricing match this budget.'
 
 
-# Export tool list
 ALL_TOOLS = [search_products, get_product_details, check_stock, get_gift_bundles]

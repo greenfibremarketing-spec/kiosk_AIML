@@ -42,11 +42,8 @@ class SessionManager:
         Clears the LangGraph thread checkpoint and removes the timestamp.
         """
         existed = session_id in self._last_active
-        if hasattr(self.checkpointer, "delete_thread"):
-            try:
-                self.checkpointer.delete_thread(session_id)
-            except Exception:
-                pass
+        # Preserve activity metadata and propagate failure if deletion fails.
+        self.checkpointer.delete_thread(session_id)
         self._last_active.pop(session_id, None)
         return existed
 
