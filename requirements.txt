@@ -19,6 +19,7 @@ langgraph>=0.2.0
 sentence-transformers>=2.2.0
 langchain-huggingface>=1.2.0
 faiss-cpu>=1.7.4
+pymongo>=4.10,<5
 
 # Testing & Utilities
 httpx>=0.25.0

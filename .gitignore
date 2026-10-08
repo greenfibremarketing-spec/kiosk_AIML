@@ -17,6 +17,7 @@ __pycache__/
 
 # Vector Store persistence
 data/vector_store/
+data/mongo_chunks/
 *.faiss
 *.pkl
 
