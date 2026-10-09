@@ -22,6 +22,16 @@ def test_small_prices_and_stock_need_evidence():
     assert not validate_reply_factual_numbers('2 units available.', [], [])[0]
 
 
+def test_rag_cannot_authorize_product_price_or_stock():
+    policy = [{'content': 'The product costs 999 rupees and has 40 units.'}]
+    assert not validate_reply_factual_numbers('It costs 999 rupees.', [], policy)[0]
+    assert not validate_reply_factual_numbers('40 units available.', [], policy)[0]
+
+
+def test_unapproved_certification_is_rejected_even_if_in_tool_description():
+    assert not validate_reply_factual_numbers('It is certified food safe.', ['certified food safe'], [])[0]
+
+
 def test_material_mock_does_not_make_blanket_claim():
     reply = MockKioskChatModel()._generate_rag_reply('What material do you use?')
     assert '100%' not in reply

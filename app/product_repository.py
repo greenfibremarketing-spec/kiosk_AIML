@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 from typing import Protocol
+from app.factual_safety import safe_description
 
 
 class ProductRepository(Protocol):
@@ -91,7 +92,14 @@ def product_view(product: dict) -> dict:
         'mrp': product.get('mrp') if valid_price(product.get('mrp')) else None,
         'stock': stock, 'stock_status': status,
         'in_stock': status == 'in_stock' if status in ('in_stock', 'out_of_stock') else None,
-        'description': product.get('description', ''),
-        'source': 'development_json', 'price_status': 'catalogue_snapshot',
+        'description': safe_description(product.get('description', '')),
+        'source': product.get('source', 'development_json'),
+        'price_status': product.get('price_status', 'catalogue_snapshot'),
+        'variants': [{**variant, 'stock': variant.get('stock') if status in ('in_stock', 'out_of_stock') else None}
+                     for variant in product.get('variants', [])],
         'certifications': [],  # No SKU approval registry exists in the JSON adapter.
+        **{key: product[key] for key in (
+            'website_sku', 'variant_id', 'variant_name', 'images', 'stock_checked_at',
+            'product_url', 'currency', 'customization_available', 'customization_types',
+        ) if key in product},
     }

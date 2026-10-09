@@ -10,6 +10,9 @@ jobs:
     timeout-minutes: 20
     env:
       LLM_PROVIDER: mock
+      PRODUCT_SOURCE: json
+      CHECKPOINTER_BACKEND: memory
+      GREENY_AI_MONGO_URL: ""
       HF_HUB_OFFLINE: '1'
       TRANSFORMERS_OFFLINE: '1'
     steps:
@@ -23,10 +26,10 @@ jobs:
       - name: Install application dependencies
         run: |
           python -m pip install pip==26.2.1
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt -c requirements-tested-constraints.txt
           python -m pip check
       - name: Run deterministic offline tests
-        run: python -m pytest tests -q -p no:cacheprovider
+        run: python -m pytest tests -q -p no:cacheprovider --junitxml=backend-tests.xml
       - name: Install isolated advisory scanner
         run: |
           python -m venv .venv-security
@@ -40,3 +43,9 @@ jobs:
         with:
           name: dependency-audit
           path: dependency-audit.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-tests
+          path: backend-tests.xml

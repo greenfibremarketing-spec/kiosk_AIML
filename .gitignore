@@ -30,3 +30,9 @@ data/mongo_chunks/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Isolated release-candidate reproduction environment
+.venv-rc/
+
+# Scratch files
+scratch/

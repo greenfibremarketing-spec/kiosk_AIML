@@ -56,6 +56,7 @@ class SalesState(BaseModel):
     customization_requirements: tuple[ShortText, ...] = Field(default=(), max_length=50)
     objections: tuple[ShortText, ...] = Field(default=(), max_length=50)
     lead_status: Literal['none', 'qualifying', 'qualified', 'submitted', 'declined'] = 'none'
+    contact_consent_pending: bool = False
     customer_contact_consent: Literal['not_asked', 'granted', 'declined', 'revoked'] = 'not_asked'
     quote_status: Literal['none', 'draft', 'requested', 'human_review'] = 'none'
     escalation_required: bool = Field(default=False, strict=True)

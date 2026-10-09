@@ -9,6 +9,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
 from app.config import settings
+from app.privacy import redact_contacts
 
 
 class TraceCallbackHandler(BaseCallbackHandler):
@@ -45,7 +46,7 @@ class TraceCallbackHandler(BaseCallbackHandler):
 
     def record_retrieved_chunks(self, chunks: List[Dict[str, Any]]) -> None:
         """Store RAG chunks retrieved during the turn."""
-        self.retrieved_chunks = chunks
+        self.retrieved_chunks = redact_contacts(chunks)
 
     def on_llm_start(
         self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any
@@ -56,7 +57,7 @@ class TraceCallbackHandler(BaseCallbackHandler):
         self.llm_end_time = time.time()
 
     def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
-        self.error = str(error)
+        self.error = type(error).__name__
 
     def on_tool_start(
         self, serialized: Dict[str, Any], input_str: str, **kwargs: Any
@@ -65,7 +66,7 @@ class TraceCallbackHandler(BaseCallbackHandler):
         tool_name = serialized.get("name", "tool")
         self.tool_calls.append({
             "tool": tool_name,
-            "input": input_str,
+            "input": redact_contacts(input_str),
             "result": None,
             "duration_ms": 0.0,
         })
@@ -73,13 +74,13 @@ class TraceCallbackHandler(BaseCallbackHandler):
     def on_tool_end(self, output: str, **kwargs: Any) -> None:
         duration_ms = (time.time() - self._current_tool_start) * 1000.0
         if self.tool_calls:
-            self.tool_calls[-1]["result"] = output
+            self.tool_calls[-1]["result"] = redact_contacts(output)
             self.tool_calls[-1]["duration_ms"] = round(duration_ms, 2)
 
     def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
         duration_ms = (time.time() - self._current_tool_start) * 1000.0
         if self.tool_calls:
-            self.tool_calls[-1]["result"] = f"[Error] {error}"
+            self.tool_calls[-1]["result"] = f"[Error] {type(error).__name__}"
             self.tool_calls[-1]["duration_ms"] = round(duration_ms, 2)
 
     @property

@@ -9,10 +9,10 @@ At Greenie, we transform this environmental challenge into a circular opportunit
 
 ## The Innovation: 100% Upcycled Rice-Husk Biocomposite
 Every Greenie product is handcrafted from an advanced, food-grade biocomposite made from 100% upcycled rice husks:
-- **Natural Ceramic Feel**: Engineered with the tactile smoothness and weight of stoneware ceramic, without the fragility or high carbon footprint of kiln firing.
-- **Toxin-Free & Food-Safe**: 100% BPA-free, melamine-free, formaldehyde-free, and phthalate-free. Safe for boiling hot coffee, tea, and acidic foods without chemical leaching.
-- **Built for Everyday Durability**: Naturally shatter-resistant, chip-resistant, and lightweight. Designed to replace single-use plastic drinkware and fragile mugs.
-- **Convenient & Functional**: Microwave-safe for quick reheating (up to 3 minutes) and top-rack dishwasher-safe for effortless cleaning.
+- **Natural Ceramic Feel**: Engineered with the tactile smoothness and earthy aesthetic of stoneware ceramic, utilizing agricultural residue.
+- **Material Focus**: Designed to eliminate single-use plastics by repurposing crop residue into durable everyday lifestyle products. Specific certifications and food-contact compliance are documented per SKU.
+- **Built for Everyday Durability**: Naturally shatter-resistant, chip-resistant, and lightweight compared to conventional ceramic or glass.
+- **Thoughtful Care**: Care guidelines, thermal ratings, and dishwasher/microwave suitability are specific to each product design. Consult individual product labels for verified usage instructions.
 
 ## Our Core Product Collections
 - **Drinkware**: Thoughtfully designed reusable bottles, travel tumblers, and mugs including the *Viora Eco Bottle*, *Statement Ceramic-Feel Mug*, and *Origin Travel Tumbler*.
