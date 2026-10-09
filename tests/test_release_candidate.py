@@ -254,6 +254,7 @@ def test_real_graph_with_mongo_saver_restart_and_redaction(monkeypatch):
     restarted = MongoCheckpointSaver(db)
     monkeypatch.setattr(brain.session_manager, 'checkpointer', restarted)
     monkeypatch.setattr(brain, 'kiosk_brain', brain.create_kiosk_graph(restarted))
+    brain.ask_avatar_turn('SPEECH_DONE', 'mongo-graph', kiosk_id='k', command={'action':'SPEECH_DONE','turn_id':'restart-ack','speech_id':first.action['speech_id']})
     assert brain.ask_avatar_turn('What is the price of a mug?', 'mongo-graph', kiosk_id='k').reply
     state = restarted.get_tuple({'configurable': {'thread_id': 'mongo-graph', 'kiosk_id': 'k'}})
     assert 'person@example.test' not in repr(state)

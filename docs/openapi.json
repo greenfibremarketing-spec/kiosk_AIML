@@ -66,6 +66,27 @@
         }
       }
     },
+    "/coordinator/metrics": {
+      "get": {
+        "summary": "Coordinator Metrics",
+        "description": "Return coordinator operational metrics and active mutex locks.",
+        "operationId": "coordinator_metrics_coordinator_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Coordinator Metrics Coordinator Metrics Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/chat": {
       "post": {
         "summary": "Chat Endpoint",
@@ -91,6 +112,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing or invalid kiosk ticket"
+          },
+          "403": {
+            "description": "Kiosk/session identity mismatch"
+          },
+          "409": {
+            "description": "Busy session, invalid stage or duplicate command"
+          },
+          "413": {
+            "description": "Request body too large"
+          },
+          "429": {
+            "description": "Request rate limit"
+          },
+          "503": {
+            "description": "Dependency unavailable; invalidate displayed product facts"
           },
           "422": {
             "description": "Validation Error",
@@ -196,10 +235,111 @@
       "ChatRequest": {
         "properties": {
           "message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "SPEECH_DONE",
+                  "SET_NAME",
+                  "SKIP_NAME",
+                  "SELECT_CATEGORY",
+                  "SHOW_ALL",
+                  "SELECT_PRODUCT",
+                  "NAVIGATE_BACK",
+                  "RESTART"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "speech_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speech Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "category_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Id"
+          },
+          "sku": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "pattern": "^GF:[A-Za-z0-9_-]{1,128}(?::[A-Za-z0-9_-]{1,128})?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sku"
+          },
+          "input_mode": {
             "type": "string",
-            "maxLength": 4000,
-            "title": "Message",
-            "description": "User query or spoken message."
+            "enum": [
+              "text",
+              "voice",
+              "button"
+            ],
+            "title": "Input Mode",
+            "default": "text"
           },
           "session_id": {
             "anyOf": [
@@ -213,8 +353,7 @@
                 "type": "null"
               }
             ],
-            "title": "Session Id",
-            "description": "Unique session identifier for multi-turn conversation memory."
+            "title": "Session Id"
           },
           "kiosk_id": {
             "anyOf": [
@@ -228,14 +367,11 @@
                 "type": "null"
               }
             ],
-            "title": "Kiosk Id",
-            "description": "Device identifier for multi-kiosk deployments."
+            "title": "Kiosk Id"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "required": [
-          "message"
-        ],
         "title": "ChatRequest"
       },
       "ChatResponse": {
@@ -258,6 +394,17 @@
               }
             ],
             "title": "Sales Stage"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
           },
           "action": {
             "anyOf": [

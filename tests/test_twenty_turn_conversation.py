@@ -57,13 +57,13 @@ TWENTY_TURNS = [
     # Turn 15: Return policy inquiry
     ("What is your return policy?", {}),
     # Turn 16: B2B corporate bulk inquiry
-    ("We need 120 bottles for corporate employee Diwali gifting, please send a quote", {"stage": SalesStage.QUALIFICATION, "action": "CONFIRM_CONTACT_CONSENT"}),
+    ("We need 120 bottles for corporate employee Diwali gifting, please send a quote", {"stage": SalesStage.QUOTE_REQUEST, "action": "CONFIRM_CONTACT_CONSENT"}),
     # Turn 17: Custom logo engraving inquiry
     ("Can we get our company logo engraved on the bottles?", {}),
     # Turn 18: Out-of-catalogue domain inquiry
     ("Do you sell laptops or smartphones?", {}),
     # Turn 19: Human handoff request
-    ("Can I speak to a human store manager please?", {"stage": SalesStage.COMPLETED, "action": "REQUEST_HUMAN"}),
+    ("Can I speak to a human store manager please?", {"stage": SalesStage.HUMAN_HANDOFF, "action": "REQUEST_HUMAN"}),
     # Turn 20: Post-handoff closing
     ("Thank you for all the help", {}),
 ]
@@ -89,6 +89,8 @@ def test_twenty_consecutive_turns_with_bounded_tokens_and_verified_prices(monkey
             kiosk_id=kiosk_id,
         )
 
+        if turn_idx == 1:
+            ask_avatar_turn("SPEECH_DONE", session_id, kiosk_id=kiosk_id, command={"action":"SPEECH_DONE", "turn_id":"greeting-ack", "speech_id":turn_result.action["speech_id"]})
         reply = turn_result.reply
         assert reply, f"Turn {turn_idx}: Reply cannot be empty"
 

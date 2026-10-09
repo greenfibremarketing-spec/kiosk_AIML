@@ -34,6 +34,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from app.guided_contract import GuidedCommandError, validate_screen_action
 from app.factual_safety import COMPLIANCE
 from app.privacy import redact_contacts
 from app.coordination import get_coordinator, SessionBusyError
@@ -413,6 +414,24 @@ class MockKioskChatModel(BaseChatModel):
         if any(w in q for w in ["python", "code", "weather", "president", "math", "bitcoin", "scrape"]):
             return "I can only assist with Greenie products, materials, and store policies."
 
+        if q in ("speech_done", "greeting_done") or "speech done" in q or "greeting done" in q:
+            return "What should I call you?"
+
+        if q in ("skip", "skip name", "skip_name", "next") or "don't want to share my name" in q or "naam nahi batana" in q:
+            return "No problem! What are you looking for today?"
+
+        if "my name is" in q or "i am" in q or "call me" in q or "mera naam" in q:
+            return "Nice to meet you! What are you looking for today?"
+
+        if "show everything" in q or "show all" in q or "all products" in q or "sab dikhao" in q:
+            return "Here is our full collection. Which product would you like to see?"
+
+        if "back" in q or "go back" in q or "piche jao" in q:
+            return "Taking you back. What would you like to explore?"
+
+        if "start over" in q or "restart" in q or "shuru se" in q:
+            return "Hi! I'm Greeny from Green Fibre. Welcome!"
+
         if re.search(r'\b(hi|hello|hey|good morning|good afternoon|namaste)\b', q):
             return "Hello! Welcome to Green Fibre. What are you shopping for today?"
 
@@ -674,6 +693,7 @@ def ask_avatar_turn(
     session_id: str,
     trace_handler: Optional[TraceCallbackHandler] = None,
     kiosk_id: Optional[str] = None,
+    command: Optional[Dict[str, Any]] = None,
 ) -> AvatarTurnResult:
     """Execute a complete conversational turn, returning reply, sales stage, and structured UI action."""
     message = redact_contacts(message)
@@ -686,6 +706,26 @@ def ask_avatar_turn(
         },
         "recursion_limit": settings.agent_recursion_limit,
     }
+    snapshot = kiosk_brain.get_state(config)
+    prior = (snapshot.values or {}).get('sales_state')
+    initial_sales = SalesState.model_validate(prior) if prior else SalesState(session_id=session_id, kiosk_id=kiosk_id or 'kiosk-default')
+    msg_lower = message.strip().lower()
+    if initial_sales.greeting_speech_id and not command and msg_lower not in ('restart', 'start over', 'shuru se'):
+        raise GuidedCommandError('Greeting speech acknowledgement is required.')
+    if command or msg_lower in ('restart', 'start over', 'shuru se') or (initial_sales.sales_stage == SalesStage.GREETING and re.fullmatch(r'(hi|hello|hey|namaste|start)\b.*', msg_lower)):
+        next_sales, ui_action = determine_sales_transition(initial_sales, message, command=command)
+        ui_action = validate_screen_action(ui_action)
+        if (command or {}).get('action') == 'RESTART' or msg_lower in ('restart', 'start over', 'shuru se'):
+            session_manager.reset_session(session_id, kiosk_id=kiosk_id or 'kiosk-default')
+        reply = (ui_action or {}).get('message') or (ui_action or {}).get('prompt') or 'The screen has been updated.'
+        kiosk_brain.update_state(config, {
+            'messages': [HumanMessage(content=message), AIMessage(content=reply)],
+            'sales_state': next_sales.model_dump(mode='json'), 'ui_action': ui_action,
+        }, as_node='agent')
+        record_conversation_turn(session_id, kiosk_id or 'kiosk-default', message, reply, next_sales.sales_stage.value)
+        return AvatarTurnResult(reply=reply, session_id=session_id, sales_stage=next_sales.sales_stage.value,
+                                action=ui_action, sales_state=next_sales.model_dump(mode='json'))
+
     if trace_handler:
         trace_handler.start_turn()
         config["callbacks"] = [trace_handler]
@@ -778,9 +818,22 @@ def ask_avatar_turn(
             curr_sales = SalesState(session_id=session_id, kiosk_id=kiosk_id or "kiosk-default")
 
         next_sales, ui_action = determine_sales_transition(curr_sales, message, turn_tool_outputs)
+        ui_action = validate_screen_action(ui_action)
 
         if ui_action and ui_action.get('action') == 'CONFIRM_CONTACT_CONSENT':
             cleaned_reply = 'May Green Fibre contact you only about this quotation? Please say yes or no.'
+        elif ui_action and ui_action.get('action') == 'REQUEST_HUMAN':
+            cleaned_reply = "A store associate can help you with this. Please ask the staff at the kiosk."
+        elif ui_action and ui_action.get('action') == 'ASK_NAME':
+            cleaned_reply = ui_action.get('message', 'What should I call you?')
+        elif ui_action and ui_action.get('message') and message.strip().lower() in ('back', 'go back', 'piche jao', 'start over', 'restart', 'skip', 'skip name', 'skip_name', 'speech_done', 'greeting_done'):
+            cleaned_reply = ui_action['message']
+        elif curr_sales.sales_stage == SalesStage.ASK_NAME and next_sales.sales_stage in (SalesStage.INTENT, SalesStage.ASK_CATEGORY):
+            if next_sales.customer_name:
+                cleaned_reply = f"Nice to meet you, {next_sales.customer_name}! What are you looking for today?"
+            else:
+                cleaned_reply = "No problem! What are you looking for today?"
+
         if next_sales.customer_contact_consent != curr_sales.customer_contact_consent:
             if next_sales.customer_contact_consent in ('declined', 'revoked'):
                 cleaned_reply = 'Your contact permission has been withdrawn. We can continue without contacting you.'
@@ -812,6 +865,7 @@ def ask_avatar_turn(
                 user_message=message,
                 ai_reply=cleaned_reply,
                 sales_stage=next_sales.sales_stage.value,
+                customer_name=next_sales.customer_name,
                 tool_calls=[{"output": t} for t in turn_tool_outputs] if turn_tool_outputs else None,
                 unanswered_reason=unanswered_reason,
             )
@@ -871,7 +925,8 @@ def ask_avatar_stream(
     message: str,
     session_id: str,
     kiosk_id: Optional[str] = None,
+    command: Optional[Dict[str, Any]] = None,
 ) -> StreamGenerator:
     """Stream the avatar's reply as word-level tokens with turn metadata."""
-    res = ask_avatar_turn(message=message, session_id=session_id, kiosk_id=kiosk_id)
+    res = ask_avatar_turn(message=message, session_id=session_id, kiosk_id=kiosk_id, command=command)
     return StreamGenerator(reply=res.reply, sales_stage=res.sales_stage, action=res.action)

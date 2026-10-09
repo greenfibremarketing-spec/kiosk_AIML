@@ -1,0 +1,67 @@
+{
+  "reply": "Here is our Viora Water Bottle - 400 ml. Would you like to see its colours, price or other details?",
+  "session_id": "frontend-demo-01",
+  "sales_stage": "PRODUCT_DETAIL",
+  "turn_id": "product-001",
+  "action": {
+    "action": "SHOW_PRODUCT",
+    "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+    "product": {
+      "id": "6ac33bf78072ec78d51387f0",
+      "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+      "name": "Viora Water Bottle - 400 ml",
+      "category": "Bottle",
+      "price": "1199",
+      "mrp": "1619",
+      "stock": 350,
+      "stock_status": "in_stock",
+      "in_stock": true,
+      "description": "400 ml water bottle with stainless steel inner, made with rice husk. For office, adults & school kids.",
+      "source": "greenfibre_api",
+      "price_status": "fresh_api",
+      "variants": [
+        {
+          "id": "6ac33bf7e3e99cc6fbcfcc2b",
+          "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+          "name": "Parrot green",
+          "images": [
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574768/ChatGPT_Image_Sep_28_2026_10_45_44_AM_evaplq.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/ChatGPT_Image_Sep_28_2026_10_46_17_AM-2_ryelck.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-2_nhsjmb.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-1_1_n4dfxt.png"
+          ],
+          "stock": 350
+        },
+        {
+          "id": "6ac33bf7e3e99cc6fbcfcc2c",
+          "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2c",
+          "name": "Orange",
+          "images": [
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_09_44_AM-3_cwpriv.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_09_49_AM-5_qloftp.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_14_57_AM_vqoz0a.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_14_50_AM_lnkina.png",
+            "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574888/Untitled_-_September_28_2026_at_11.11.23_yjvpgu.png"
+          ],
+          "stock": 350
+        }
+      ],
+      "certifications": [],
+      "website_sku": null,
+      "variant_id": "6ac33bf7e3e99cc6fbcfcc2b",
+      "variant_name": "Parrot green",
+      "images": [
+        "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574768/ChatGPT_Image_Sep_28_2026_10_45_44_AM_evaplq.png",
+        "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/ChatGPT_Image_Sep_28_2026_10_46_17_AM-2_ryelck.png",
+        "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-2_nhsjmb.png",
+        "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-1_1_n4dfxt.png"
+      ],
+      "stock_checked_at": "2026-10-09T10:20:47.321631+00:00",
+      "product_url": "https://greenfibre.org/shop/viora-water-bottle-400ml",
+      "currency": "INR",
+      "customization_available": true,
+      "customization_types": []
+    },
+    "message": "Here is our Viora Water Bottle - 400 ml. Would you like to see its colours, price or other details?"
+  }
+}

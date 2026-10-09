@@ -27,10 +27,19 @@ class SalesStage(str, Enum):
     OBJECTION_HANDLING = 'OBJECTION_HANDLING'
     CONVERSION = 'CONVERSION'
     COMPLETED = 'COMPLETED'
+    # Guided conversation stages
+    ASK_NAME = 'ASK_NAME'
+    ASK_CATEGORY = 'ASK_CATEGORY'
+    SHOW_PRODUCTS = 'SHOW_PRODUCTS'
+    PRODUCT_DETAIL = 'PRODUCT_DETAIL'
+    PRODUCT_QUESTIONS = 'PRODUCT_QUESTIONS'
+    B2B_QUALIFICATION = 'B2B_QUALIFICATION'
+    QUOTE_REQUEST = 'QUOTE_REQUEST'
+    HUMAN_HANDOFF = 'HUMAN_HANDOFF'
 
 
 class SalesState(BaseModel):
-    """Immutable anonymous state; no raw contacts or conversation messages.
+    """Immutable session state with an optional display name; no phone/email fields.
 
     Budget is the customer's INR budget per item/gift, not a verified product price.
     Delivery location should be a city/region rather than a personal street address.
@@ -45,6 +54,12 @@ class SalesState(BaseModel):
     language: Literal['unknown', 'en', 'hi', 'hinglish'] = 'unknown'
     customer_intent: Literal['unknown', 'b2b', 'd2c', 'support'] = 'unknown'
     sales_stage: SalesStage = SalesStage.GREETING
+    guided_mode: bool = False
+    greeting_speech_id: str | None = None
+    processed_event_ids: tuple[str, ...] = Field(default=(), max_length=128)
+    customer_name: ShortText | None = None
+    previous_stage: SalesStage | None = None
+    selected_category: ShortText | None = None
     occasion: ShortText | None = None
     budget: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False, decimal_places=2)
     quantity: int | None = Field(default=None, strict=True, gt=0)

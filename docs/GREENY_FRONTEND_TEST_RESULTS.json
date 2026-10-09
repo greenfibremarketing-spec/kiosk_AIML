@@ -1,0 +1,107 @@
+{
+  "command": "python -m pytest tests -q -p no:cacheprovider --junitxml=<temporary-file>",
+  "base_commit": "1c3b6d54b09f981ec74065b4f52b08cdfe838451",
+  "summary": "279 passed, 1 skipped, 1 warning in 6.31s",
+  "counts": {
+    "passed": 279,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "modules": {
+    "tests.test_actions_and_identity": {
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_api_reliability": {
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_brain_reliability": {
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_coordinator_hardening": {
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_final_audit": {
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_frontend_contract_audit": {
+      "passed": 2,
+      "failed": 0,
+      "skipped": 1
+    },
+    "tests.test_greenfibre_repository": {
+      "passed": 40,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_guided_conversation": {
+      "passed": 20,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_guided_transport_contract": {
+      "passed": 21,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_mongo_persistence": {
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_product_chunks": {
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_product_tools": {
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_release_candidate": {
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_sales_engine": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_sales_state": {
+      "passed": 43,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_session_reset": {
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_twenty_turn_conversation": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests.test_ws_protocol_v2": {
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "source_manifest_verified": true,
+  "live_api_test_run": false,
+  "loopback_network_test": "test_guided_transport_contract.test_actual_loopback_rest_and_websocket_v2",
+  "documentation_json_examples_validated": 22
+}

@@ -1,5 +1,7 @@
 # Greeny backend release candidate
 
+> Historical reliability audit: the current guided-flow source, test results and handoff are documented in [GREENY_FRONTEND_CONTRACT_FINAL.md](GREENY_FRONTEND_CONTRACT_FINAL.md). Later coordinator and guided-flow changes supersede the implementation details below. The source manifest identifies the current tested working tree.
+
 Review date: **9 October 2026**. Branch: **feature/greeny-reliability-fixes**.
 Base commit: **4163bf2** (`Add Greeny architecture audit and validated sales state`).
 This is an **uncommitted, staged proposal**, not a deployed release. It supersedes

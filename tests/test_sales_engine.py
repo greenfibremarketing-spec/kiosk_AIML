@@ -134,8 +134,9 @@ def test_greeting_triggers_show_categories():
     assert next_state.sales_stage == SalesStage.GREETING
     assert action is not None
     assert action["action"] == "SHOW_CATEGORIES"
-    assert len(action["categories"]) == 5
-    assert action["categories"][0]["id"] == "drinkware"
+    assert action["categories"] == []
+    assert action["awaiting_speech_done"] is True
+    assert action["input_enabled"] is False
 
 
 def test_category_inquiry_triggers_show_categories():
@@ -144,7 +145,7 @@ def test_category_inquiry_triggers_show_categories():
 
     assert action is not None
     assert action["action"] == "SHOW_CATEGORIES"
-    assert action["categories"] == CATEGORIES_METADATA
+    assert {item["name"] for item in action["categories"]} == {p["category"] for p in MOCK_CATALOG["products"]}
 
 
 def test_budget_qualification_triggers_show_price_bands():

@@ -39,7 +39,8 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
+from app.guided_contract import ConversationInput, GuidedCommandError
 import uvicorn
 
 from app.brain import ask_avatar, ask_avatar_stream, ask_avatar_turn, AvatarTurnResult
@@ -51,6 +52,7 @@ from app.rag import warmup_rag
 from app.sessions import session_manager
 from app.storage import DatabaseConnectionError
 from app.tools import _load_catalog
+from app.greenfibre_repository import ProductAPIError
 
 # Thread pool for running sync LangGraph brain in async context
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -317,24 +319,22 @@ async def validation_error(request, exc):
     ]})
 
 
-class ChatRequest(BaseModel):
-    message: str = Field(..., max_length=settings.max_message_chars, description="User query or spoken message.")
-    session_id: Optional[str] = Field(
-        default=None,
-        min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_.:-]+$',
-        description="Unique session identifier for multi-turn conversation memory.",
-    )
-    kiosk_id: Optional[str] = Field(
-        default=None,
-        min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.:-]+$',
-        description="Device identifier for multi-kiosk deployments.",
-    )
+class ChatRequest(ConversationInput):
+    session_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_.:-]+$')
+    kiosk_id: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.:-]+$')
+
+    @model_validator(mode='after')
+    def command_session(self):
+        if self.action and not self.session_id:
+            raise ValueError('REST commands require session_id.')
+        return self
 
 
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
     sales_stage: Optional[str] = None
+    turn_id: Optional[str] = None
     action: Optional[Dict[str, Any]] = None
 
 
@@ -422,18 +422,22 @@ def coordinator_metrics(request: Request) -> Dict[str, Any]:
     }
 
 
-@api.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
+@api.post("/chat", response_model=ChatResponse, response_model_exclude_none=True, responses={
+    401: {"description": "Missing or invalid kiosk ticket"},
+    403: {"description": "Kiosk/session identity mismatch"},
+    409: {"description": "Busy session, invalid stage or duplicate command"},
+    413: {"description": "Request body too large"},
+    429: {"description": "Request rate limit"},
+    503: {"description": "Dependency unavailable; invalidate displayed product facts"},
+})
 @api.post("/v1/chat", response_model=ChatResponse, response_model_exclude_none=True, include_in_schema=False)
 def chat_endpoint(request: Request, body: ChatRequest) -> ChatResponse:
     """Chat with the Greenie AI shopping avatar. Versioned alias: POST /v1/chat."""
     verified_kiosk_id = verify_kiosk_auth(request, claimed_kiosk_id=body.kiosk_id)
     kiosk_id = verified_kiosk_id
+    msg = body.normalized_message()
+
     sid = body.session_id or f"web-{uuid.uuid4().hex}"
-    msg = body.message.strip()
-
-    if not msg:
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
     try:
         # Check if ask_avatar has been monkeypatched or replaced (e.g. by unit tests)
         current_ask = sys.modules[__name__].ask_avatar
@@ -442,13 +446,18 @@ def chat_endpoint(request: Request, body: ChatRequest) -> ChatResponse:
             raw_reply = current_ask(message=msg, session_id=sid, kiosk_id=kiosk_id)
             return ChatResponse(reply=str(raw_reply), session_id=sid)
 
-        turn = ask_avatar_turn(message=msg, session_id=sid, kiosk_id=kiosk_id)
+        turn = ask_avatar_turn(message=msg, session_id=sid, kiosk_id=kiosk_id, **({"command": body.command()} if body.action else {}))
         return ChatResponse(
             reply=turn.reply,
             session_id=sid,
             sales_stage=turn.sales_stage,
+            turn_id=body.turn_id,
             action=turn.action,
         )
+    except GuidedCommandError:
+        raise HTTPException(status_code=409, detail="Command is invalid for the current stage or already processed.") from None
+    except ProductAPIError:
+        raise HTTPException(status_code=503, detail={"code": "product_data_unavailable", "invalidate_product_facts": True}) from None
     except SessionBusyError:
         raise HTTPException(status_code=409, detail="Session is busy; retry after the current turn.") from None
     except CrossKioskAccessError as e:
@@ -485,6 +494,10 @@ def reset_session(request: Request, body: SessionResetRequest) -> Dict[str, str]
             session_manager.reset_session(body.session_id, kiosk_id=kiosk_id)
         # Also clear any dangling cancel flag
         _cancel_flags.pop(body.session_id, None)
+    except GuidedCommandError:
+        raise HTTPException(status_code=409, detail="Command is invalid for the current stage or already processed.") from None
+    except ProductAPIError:
+        raise HTTPException(status_code=503, detail={"code": "product_data_unavailable", "invalidate_product_facts": True}) from None
     except SessionBusyError:
         raise HTTPException(status_code=409, detail="Session is busy; retry after the current turn.") from None
     except CrossKioskAccessError as e:
@@ -666,7 +679,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 if not disconnected.is_set():
                     await ws_manager.send_json(websocket, _ws_envelope(kind, data, meta=meta, v2=is_v2))
 
-    async def execute(message, turn_id):
+    async def execute(message, turn_id, command=None):
         # Inference and generator iteration both run off the receive loop.
         # The provider is synchronous: cancellation suppresses output, it does
         # not kill a thread or claim that provider billing/work has stopped.
@@ -683,7 +696,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             return
 
         def generate():
-            stream = ask_avatar_stream(message=message, session_id=session_id, kiosk_id=verified_kiosk_id)
+            stream = ask_avatar_stream(message=message, session_id=session_id, kiosk_id=verified_kiosk_id, **({"command": command} if command else {}))
             action = getattr(stream, 'action', None)
             stage = getattr(stream, 'sales_stage', None)
             words = []
@@ -705,7 +718,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 await send('cancelled', '', {'turn_id': turn_id, 'provider_cancelled': False, 'output_suppressed': True})
                 return
             if is_v2 and action:
-                await send('action', action)
+                await send('action', action, {'turn_id': turn_id})
             full_reply = ''
             sentence = ''
             for word in words:
@@ -731,6 +744,9 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
         except Exception as exc:
             logger.error('WS turn failed: category=%s', type(exc).__name__)
             if not cancelled.is_set():
+                if isinstance(exc, (GuidedCommandError, ProductAPIError)):
+                    await send('error', 'Product information is unavailable.' if isinstance(exc, ProductAPIError) else 'Command is invalid for the current stage or already processed.', {'code': 'product_data_unavailable' if isinstance(exc, ProductAPIError) else 'invalid_stage', 'invalidate_product_facts': True})
+                    return
                 await send('error', 'Session is busy.' if isinstance(exc, SessionBusyError) else 'Database persistence unavailable. Outage fail-safe active.' if isinstance(exc, DatabaseConnectionError) else 'Unable to process your message. Please try again.')
 
     try:
@@ -761,13 +777,18 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 cancelled.set()
                 await send('cancelled', '', {'turn_id': current_id, 'provider_cancelled': False, 'output_suppressed': True})
                 continue
-            message = payload.get('message')
-            if not isinstance(message, str) or not message.strip():
-                await send('error', 'Provide a text message.')
+            try:
+                body = ChatRequest.model_validate({
+                    **{key: value for key, value in payload.items() if key != 'v'},
+                    'session_id': session_id,
+                })
+            except ValidationError:
+                await send('error', 'Invalid command payload.', {'code': 'validation_error'})
                 continue
-            if len(message) > settings.max_message_chars:
-                await send('error', 'Message is too long.')
+            if payload.get('session_id') and payload['session_id'] != session_id:
+                await send('error', 'Session identity mismatch.')
                 continue
+            message = body.normalized_message()
             if payload.get('kiosk_id') and payload['kiosk_id'] != verified_kiosk_id:
                 await send('error', 'Identity mismatch.')
                 continue
@@ -785,7 +806,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             current_id = turn_id
             cancelled.clear()
             _cancel_flags[session_id] = False
-            running = asyncio.create_task(execute(message.strip(), turn_id))
+            running = asyncio.create_task(execute(message.strip(), turn_id, body.command()))
     except WebSocketDisconnect:
         pass
     finally:

@@ -1,0 +1,334 @@
+{
+  "observed_at": "2026-10-09T10:04:59.310829+00:00",
+  "product_source": "greenfibre",
+  "products": [
+    {
+      "id": "6ac33bf78072ec78d51387f0",
+      "sku": "GF:6ac33bf78072ec78d51387f0",
+      "name": "Viora Water Bottle - 400 ml",
+      "category": "Bottle",
+      "variants": [
+        {
+          "id": "6ac33bf7e3e99cc6fbcfcc2b",
+          "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+          "name": "Parrot green"
+        },
+        {
+          "id": "6ac33bf7e3e99cc6fbcfcc2c",
+          "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2c",
+          "name": "Orange"
+        }
+      ]
+    },
+    {
+      "id": "6ac33bf78072ec78d51387ee",
+      "sku": "GF:6ac33bf78072ec78d51387ee",
+      "name": "Viora Water Bottle - 900 ml",
+      "category": "Bottle",
+      "variants": [
+        {
+          "id": "6ac33bf6e3e99cc6fbcfcc15",
+          "sku": "GF:6ac33bf78072ec78d51387ee:6ac33bf6e3e99cc6fbcfcc15",
+          "name": "Mint Green"
+        },
+        {
+          "id": "6ac77b4c6de9d826b8fb052e",
+          "sku": "GF:6ac33bf78072ec78d51387ee:6ac77b4c6de9d826b8fb052e",
+          "name": "Light Pink"
+        }
+      ]
+    },
+    {
+      "id": "6abe06a58072ec78d510b370",
+      "sku": "GF:6abe06a58072ec78d510b370",
+      "name": "Classic Mug - Set of 4",
+      "category": "Drinkware",
+      "variants": [
+        {
+          "id": "6abe06bc7ee90868902abdeb",
+          "sku": "GF:6abe06a58072ec78d510b370:6abe06bc7ee90868902abdeb",
+          "name": "Off White"
+        }
+      ]
+    },
+    {
+      "id": "6abe06a58072ec78d510b36e",
+      "sku": "GF:6abe06a58072ec78d510b36e",
+      "name": "Classic Mug - Set of 2",
+      "category": "Drinkware",
+      "variants": [
+        {
+          "id": "6abe06bb7ee90868902abdda",
+          "sku": "GF:6abe06a58072ec78d510b36e:6abe06bb7ee90868902abdda",
+          "name": "Off White"
+        }
+      ]
+    },
+    {
+      "id": "6abe05dd8072ec78d510ae5e",
+      "sku": "GF:6abe05dd8072ec78d510ae5e",
+      "name": "Storage Bowl",
+      "category": "Kitchen & Dining",
+      "variants": [
+        {
+          "id": "6abe05dbc1e0a0c2817472d9",
+          "sku": "GF:6abe05dd8072ec78d510ae5e:6abe05dbc1e0a0c2817472d9",
+          "name": "Natural"
+        }
+      ]
+    },
+    {
+      "id": "6abe03d88072ec78d510add7",
+      "sku": "GF:6abe03d88072ec78d510add7",
+      "name": "Casserole",
+      "category": "Kitchen & Dining",
+      "variants": [
+        {
+          "id": "6abe03d77722d420f5e4ab80",
+          "sku": "GF:6abe03d88072ec78d510add7:6abe03d77722d420f5e4ab80",
+          "name": "Off white"
+        }
+      ]
+    },
+    {
+      "id": "6abe027f8072ec78d510ad9b",
+      "sku": "GF:6abe027f8072ec78d510ad9b",
+      "name": "Table top planter",
+      "category": "Planter",
+      "variants": [
+        {
+          "id": "6abe027edc4be8cf67b8f415",
+          "sku": "GF:6abe027f8072ec78d510ad9b:6abe027edc4be8cf67b8f415",
+          "name": "Off white"
+        },
+        {
+          "id": "6abe027edc4be8cf67b8f416",
+          "sku": "GF:6abe027f8072ec78d510ad9b:6abe027edc4be8cf67b8f416",
+          "name": "Light green"
+        }
+      ]
+    },
+    {
+      "id": "6abdff848072ec78d510acf1",
+      "sku": "GF:6abdff848072ec78d510acf1",
+      "name": "Flora Soup Bowl",
+      "category": "Kitchen & Dining",
+      "variants": [
+        {
+          "id": "6abdff836163c6d2cad46e3c",
+          "sku": "GF:6abdff848072ec78d510acf1:6abdff836163c6d2cad46e3c",
+          "name": "Light Pink"
+        },
+        {
+          "id": "6abdff836163c6d2cad46e3d",
+          "sku": "GF:6abdff848072ec78d510acf1:6abdff836163c6d2cad46e3d",
+          "name": "Light Green"
+        }
+      ]
+    },
+    {
+      "id": "6abdff438072ec78d510ace9",
+      "sku": "GF:6abdff438072ec78d510ace9",
+      "name": "Tissue Box - Pair of 2",
+      "category": "Tableware",
+      "variants": [
+        {
+          "id": "6abdff4216cc3f977f710dfa",
+          "sku": "GF:6abdff438072ec78d510ace9:6abdff4216cc3f977f710dfa",
+          "name": "Off white"
+        },
+        {
+          "id": "6abdff4216cc3f977f710dfb",
+          "sku": "GF:6abdff438072ec78d510ace9:6abdff4216cc3f977f710dfb",
+          "name": "Coffee"
+        }
+      ]
+    },
+    {
+      "id": "6abdfe558072ec78d510acd3",
+      "sku": "GF:6abdfe558072ec78d510acd3",
+      "name": "Soup Bowl",
+      "category": "Kitchen & Dining",
+      "variants": [
+        {
+          "id": "6abdfe540567499a5aa16251",
+          "sku": "GF:6abdfe558072ec78d510acd3:6abdfe540567499a5aa16251",
+          "name": "Light Green"
+        },
+        {
+          "id": "6abdfe540567499a5aa16252",
+          "sku": "GF:6abdfe558072ec78d510acd3:6abdfe540567499a5aa16252",
+          "name": "Charcoal"
+        }
+      ]
+    },
+    {
+      "id": "6abdfa578072ec78d510ac7b",
+      "sku": "GF:6abdfa578072ec78d510ac7b",
+      "name": "Statement Mug - Set of 4",
+      "category": "Drinkware",
+      "variants": [
+        {
+          "id": "6abdfa5638997ef0379ef52b",
+          "sku": "GF:6abdfa578072ec78d510ac7b:6abdfa5638997ef0379ef52b",
+          "name": "Off white"
+        },
+        {
+          "id": "6abdfa5638997ef0379ef52c",
+          "sku": "GF:6abdfa578072ec78d510ac7b:6abdfa5638997ef0379ef52c",
+          "name": "Coffee"
+        }
+      ]
+    },
+    {
+      "id": "6abdfa2b8072ec78d510ac76",
+      "sku": "GF:6abdfa2b8072ec78d510ac76",
+      "name": "Statement Mug",
+      "category": "Drinkware",
+      "variants": [
+        {
+          "id": "6abdfa2a7065519743b408f2",
+          "sku": "GF:6abdfa2b8072ec78d510ac76:6abdfa2a7065519743b408f2",
+          "name": "Off white"
+        },
+        {
+          "id": "6abdfa2a7065519743b408f3",
+          "sku": "GF:6abdfa2b8072ec78d510ac76:6abdfa2a7065519743b408f3",
+          "name": "Coffee"
+        }
+      ]
+    },
+    {
+      "id": "6abbfa728072ec78d50bbd09",
+      "sku": "GF:6abbfa728072ec78d50bbd09",
+      "name": "Canister",
+      "category": "Storage",
+      "variants": [
+        {
+          "id": "6abbfa71fc71352e5d9d32f0",
+          "sku": "GF:6abbfa728072ec78d50bbd09:6abbfa71fc71352e5d9d32f0",
+          "name": "Off white"
+        },
+        {
+          "id": "6abbfa71fc71352e5d9d32f1",
+          "sku": "GF:6abbfa728072ec78d50bbd09:6abbfa71fc71352e5d9d32f1",
+          "name": "Charcoal"
+        }
+      ]
+    },
+    {
+      "id": "6abbb3bd85b42cb88c8a8d07",
+      "sku": "GF:6abbb3bd85b42cb88c8a8d07",
+      "name": "Eco Mini Gift Packaging",
+      "category": "Gift Boxes & Hampers",
+      "variants": [
+        {
+          "id": "6abbb3bd85b42cb88c8a8d0a",
+          "sku": "GF:6abbb3bd85b42cb88c8a8d07:6abbb3bd85b42cb88c8a8d0a",
+          "name": "Off White"
+        },
+        {
+          "id": "6abbb3bd85b42cb88c8a8d0b",
+          "sku": "GF:6abbb3bd85b42cb88c8a8d07:6abbb3bd85b42cb88c8a8d0b",
+          "name": "Coffee"
+        }
+      ]
+    },
+    {
+      "id": "6abbaf771a00323d9d9681d6",
+      "sku": "GF:6abbaf771a00323d9d9681d6",
+      "name": "Eco Dining Set",
+      "category": "Gift Boxes & Hampers",
+      "variants": [
+        {
+          "id": "6abbaf771a00323d9d9681e1",
+          "sku": "GF:6abbaf771a00323d9d9681d6:6abbaf771a00323d9d9681e1",
+          "name": "Multiple colours"
+        }
+      ]
+    },
+    {
+      "id": "6abb9ea741c3bdffa53c2df3",
+      "sku": "GF:6abb9ea741c3bdffa53c2df3",
+      "name": "Eco Desk Set",
+      "category": "Gift Boxes & Hampers",
+      "variants": [
+        {
+          "id": "6abb9ea741c3bdffa53c2dfc",
+          "sku": "GF:6abb9ea741c3bdffa53c2df3:6abb9ea741c3bdffa53c2dfc",
+          "name": "Mixed / Product Assortment"
+        }
+      ]
+    },
+    {
+      "id": "6abb7adb3b3433817a2a5dbb",
+      "sku": "GF:6abb7adb3b3433817a2a5dbb",
+      "name": "Eco Green Fibre Family Pack",
+      "category": "Gift Boxes & Hampers",
+      "variants": [
+        {
+          "id": "6abb7adb3b3433817a2a5dc4",
+          "sku": "GF:6abb7adb3b3433817a2a5dbb:6abb7adb3b3433817a2a5dc4",
+          "name": "Mixed / Product Assortment"
+        }
+      ]
+    }
+  ],
+  "detail_example": {
+    "id": "6ac33bf78072ec78d51387f0",
+    "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+    "name": "Viora Water Bottle - 400 ml",
+    "category": "Bottle",
+    "price": "1199",
+    "mrp": "1619",
+    "stock": 350,
+    "stock_status": "in_stock",
+    "in_stock": true,
+    "description": "400 ml water bottle with stainless steel inner, made with rice husk. For office, adults & school kids.",
+    "source": "greenfibre_api",
+    "price_status": "fresh_api",
+    "variants": [
+      {
+        "id": "6ac33bf7e3e99cc6fbcfcc2b",
+        "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2b",
+        "name": "Parrot green",
+        "images": [
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574768/ChatGPT_Image_Sep_28_2026_10_45_44_AM_evaplq.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/ChatGPT_Image_Sep_28_2026_10_46_17_AM-2_ryelck.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-2_nhsjmb.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-1_1_n4dfxt.png"
+        ],
+        "stock": 350
+      },
+      {
+        "id": "6ac33bf7e3e99cc6fbcfcc2c",
+        "sku": "GF:6ac33bf78072ec78d51387f0:6ac33bf7e3e99cc6fbcfcc2c",
+        "name": "Orange",
+        "images": [
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_09_44_AM-3_cwpriv.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_09_49_AM-5_qloftp.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_14_57_AM_vqoz0a.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574884/ChatGPT_Image_Sep_28_2026_11_14_50_AM_lnkina.png",
+          "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574888/Untitled_-_September_28_2026_at_11.11.23_yjvpgu.png"
+        ],
+        "stock": 350
+      }
+    ],
+    "certifications": [],
+    "website_sku": null,
+    "variant_id": "6ac33bf7e3e99cc6fbcfcc2b",
+    "variant_name": "Parrot green",
+    "images": [
+      "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574768/ChatGPT_Image_Sep_28_2026_10_45_44_AM_evaplq.png",
+      "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/ChatGPT_Image_Sep_28_2026_10_46_17_AM-2_ryelck.png",
+      "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-2_nhsjmb.png",
+      "https://res.cloudinary.com/dsebrpcyz/image/upload/v1790574769/Untitled_-_September_28_2026_at_10.56.17-1_1_n4dfxt.png"
+    ],
+    "stock_checked_at": "2026-10-09T10:20:47.321631+00:00",
+    "product_url": "https://greenfibre.org/shop/viora-water-bottle-400ml",
+    "currency": "INR",
+    "customization_available": true,
+    "customization_types": []
+  },
+  "detail_example_note": "Read-only observation, not a current price/stock guarantee. Frontend must obtain fresh backend verification."
+}
