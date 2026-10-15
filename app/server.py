@@ -497,6 +497,17 @@ def get_products() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Catalogue is temporarily unavailable.") from None
 
 
+@api.get("/pairups")
+def get_pairups(product_id: Optional[str] = "", cart: Optional[str] = "") -> List[Dict[str, Any]]:
+    """Return 3 to 4 pair-up recommendations for a given product, excluding cart items."""
+    try:
+        from app.recommendation import get_pairup_recommendations
+        return get_pairup_recommendations(product_id=product_id or "", cart=cart or "")
+    except Exception as e:
+        logger.error("Pair-ups failed: %s", e)
+        return []
+
+
 @api.post("/session/reset")
 @api.post("/v1/session/reset", include_in_schema=False)
 def reset_session(request: Request, body: SessionResetRequest) -> Dict[str, str]:
