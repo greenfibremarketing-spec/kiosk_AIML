@@ -430,7 +430,7 @@ class MockKioskChatModel(BaseChatModel):
             return "Taking you back. What would you like to explore?"
 
         if "start over" in q or "restart" in q or "shuru se" in q:
-            return "Hi! I'm Greeny from Green Fibre. Welcome!"
+            return "Hi! I'm Greeny, your shopping guide at Green Fibre. I'm here to help you discover our eco-friendly products, made from rice husk."
 
         if re.search(r'\b(hi|hello|hey|good morning|good afternoon|namaste)\b', q):
             return "Hello! Welcome to Green Fibre. What are you shopping for today?"

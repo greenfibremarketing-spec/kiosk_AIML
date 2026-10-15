@@ -29,8 +29,65 @@ from pydantic import BaseModel, Field
 from app.sales_state import SalesStage, SalesState
 from app.tools import _load_catalog, get_product_repository
 from app.product_repository import product_view, is_active, valid_price
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 
 logger = logging.getLogger("greenie.sales_engine")
+
+_catalog_cache: Optional[Dict[str, Any]] = None
+_catalog_cache_expires: float = 0.0
+_catalog_repo_id: Optional[int] = None
+_catalog_snapshot_hash: Optional[str] = None
+_catalog_lock = threading.Lock()
+
+
+def clear_verified_catalog_cache() -> None:
+    global _catalog_cache, _catalog_cache_expires, _catalog_repo_id, _catalog_snapshot_hash
+    with _catalog_lock:
+        _catalog_cache = None
+        _catalog_cache_expires = 0.0
+        _catalog_repo_id = None
+        _catalog_snapshot_hash = None
+
+
+def get_verified_catalog() -> Dict[str, Any]:
+    global _catalog_cache, _catalog_cache_expires, _catalog_repo_id, _catalog_snapshot_hash
+    now = time.time()
+    with _catalog_lock:
+        repository = get_product_repository()
+        snapshot = repository.catalog()
+        repo_id = id(repository)
+        snap_hash = f"{len(snapshot.get('products', []))}:{repr([(p.get('id'), p.get('price')) for p in snapshot.get('products', [])])}"
+        if (
+            _catalog_cache is not None
+            and now < _catalog_cache_expires
+            and _catalog_repo_id == repo_id
+            and _catalog_snapshot_hash == snap_hash
+            and not getattr(repository, "failed", False)
+        ):
+            return _catalog_cache
+        prods = snapshot.get("products", [])
+
+        def fetch_prod(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not candidate.get("sku"):
+                return None
+            fresh = repository.get(candidate["sku"])
+            if fresh and is_active(fresh):
+                view = product_view(fresh)
+                if fresh.get("source") == "greenfibre_api" and view["stock_status"] != "in_stock":
+                    return None
+                return {**fresh, **view}
+            return None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            verified = [p for p in pool.map(fetch_prod, prods) if p is not None]
+        catalog = {"products": verified}
+        _catalog_cache = catalog
+        _catalog_cache_expires = now + 600.0
+        _catalog_repo_id = repo_id
+        _catalog_snapshot_hash = snap_hash
+        return catalog
 
 # Legacy visual metadata retained for imports; live options use catalog_categories().
 CATEGORIES_METADATA = [
@@ -258,15 +315,27 @@ def find_specific_product(query: str, catalog: Dict[str, Any]) -> Optional[Dict[
     q_lower = query.lower()
     if q_lower.startswith('select_product:'):
         exact = query.split(':', 1)[1].strip()
+        exact_lower = exact.lower()
         for product in products:
-            if product.get('sku') == exact:
+            if product.get('sku') == exact or (product.get('sku') or '').lower() == exact_lower:
                 return product
             for variant in product.get('variants', []):
-                if variant.get('sku') == exact:
-                    return {**product, 'sku': exact, 'variant_id': variant.get('id'),
+                if variant.get('sku') == exact or (variant.get('sku') or '').lower() == exact_lower:
+                    return {**product, 'sku': variant.get('sku'), 'variant_id': variant.get('id'),
                             'variant_name': variant.get('name'), 'images': variant.get('images', []), 'stock': variant.get('stock'),
                             'in_stock': variant['stock'] > 0 if type(variant.get('stock')) is int else None,
                             'stock_status': 'in_stock' if type(variant.get('stock')) is int and variant['stock'] > 0 else 'out_of_stock' if variant.get('stock') == 0 else 'unknown'}
+        for product in products:
+            if (product.get('id') or '').lower() == exact_lower or (product.get('website_sku') or '').lower() == exact_lower or (product.get('name') or '').lower() == exact_lower:
+                return product
+        for product in products:
+            p_name = (product.get('name') or '').lower()
+            p_slug = (product.get('slug') or '').lower()
+            if len(exact_lower) >= 3 and (exact_lower in p_name or p_name in exact_lower or exact_lower in p_slug):
+                return product
+        fallback_match = find_specific_product(exact, catalog)
+        if fallback_match:
+            return fallback_match
         return None
 
 
@@ -384,19 +453,7 @@ def _determine_sales_transition(
     msg = user_message.strip().lower()
     if catalog is None:
         try:
-            repository = get_product_repository()
-            snapshot = repository.catalog()
-            verified = []
-            for candidate in snapshot.get("products", []):
-                if not candidate.get("sku"):
-                    continue
-                fresh = repository.get(candidate["sku"])
-                if fresh and is_active(fresh):
-                    view = product_view(fresh)
-                    if fresh.get("source") == "greenfibre_api" and view["stock_status"] != "in_stock":
-                        continue
-                    verified.append({**fresh, **view})
-            catalog = {"products": verified}
+            catalog = get_verified_catalog()
         except Exception as exc:
             raise ProductAPIError("Product information is unavailable.") from None
 
@@ -423,7 +480,7 @@ def _determine_sales_transition(
             "action": "SHOW_CATEGORIES",
             "categories": catalog_categories(catalog),
             "show_all": SHOW_ALL_OPTION,
-            "message": "Hi! I'm Greeny from Green Fibre. Welcome!",
+            "message": "Hi! I'm Greeny, your shopping guide at Green Fibre. I'm here to help you discover our eco-friendly products, made from rice husk.",
         }
         return current_state.with_updates(**updates), action
 
@@ -441,7 +498,7 @@ def _determine_sales_transition(
                 "action": "SHOW_PRODUCTS",
                 "products": prod_cards,
                 "count": len(prod_cards),
-                "message": "Going back to the product list. Which one would you like to explore?",
+                "message": "Of course. Which one would you like to explore?",
             }
             return current_state.with_updates(**updates), action
         elif current_state.sales_stage in (SalesStage.RECOMMENDATION, SalesStage.PRODUCT_DISCOVERY, SalesStage.SHOW_PRODUCTS, SalesStage.B2B_QUALIFICATION, SalesStage.QUOTE_REQUEST, SalesStage.HUMAN_HANDOFF):
@@ -451,7 +508,7 @@ def _determine_sales_transition(
                 "action": "SHOW_CATEGORIES",
                 "categories": catalog_categories(catalog),
                 "show_all": SHOW_ALL_OPTION,
-                "message": "Taking you back to our categories. What are you looking for today?",
+                "message": "Sure! What are you looking for today?",
             }
             return current_state.with_updates(**updates), action
         elif current_state.sales_stage in (SalesStage.INTENT, SalesStage.ASK_CATEGORY):
@@ -459,10 +516,10 @@ def _determine_sales_transition(
             updates["sales_stage"] = SalesStage.ASK_NAME
             action = {
                 "action": "ASK_NAME",
-                "prompt": "What should I call you?",
+                "prompt": "Before we start, may I know your name?",
                 "skip_allowed": True,
                 "options": [{"id": "skip", "label": "Skip"}],
-                "message": "Going back. What should I call you?",
+                "message": "No problem, let's try again. What should I call you?",
             }
             return current_state.with_updates(**updates), action
         elif current_state.sales_stage == SalesStage.ASK_NAME:
@@ -472,7 +529,7 @@ def _determine_sales_transition(
                 "action": "SHOW_CATEGORIES",
                 "categories": catalog_categories(catalog),
                 "show_all": SHOW_ALL_OPTION,
-                "message": "Hi! I'm Greeny from Green Fibre. Welcome!",
+                "message": "Hi! I'm Greeny, your shopping guide at Green Fibre. I'm here to help you discover our eco-friendly products, made from rice husk.",
             }
             return current_state.with_updates(**updates), action
 
@@ -481,10 +538,10 @@ def _determine_sales_transition(
         updates["sales_stage"] = SalesStage.ASK_NAME
         action = {
             "action": "ASK_NAME",
-            "prompt": "What should I call you?",
+            "prompt": "Before we start, may I know your name?",
             "skip_allowed": True,
             "options": [{"id": "skip", "label": "Skip"}],
-            "message": "What should I call you?",
+            "message": "Before we start, may I know your name?",
         }
         return current_state.with_updates(**updates), action
 
@@ -493,17 +550,20 @@ def _determine_sales_transition(
         "skip_name", "skip name", "skip", "next", "i don't want to share my name",
         "dont want to share my name", "naam nahi batana", "no name", "naam nahi", "chodo", "aage",
         "don't want to share", "dont want to share", "not sharing", "refuse", "will not share", "won't share",
-        "no", "nahi", "nahin"
+        "no", "nahi", "nahin",
     ]
     if current_state.sales_stage == SalesStage.ASK_NAME:
         if any(re.search(r"\b" + re.escape(k) + r"\b", msg) for k in skip_name_phrases):
             updates["customer_name"] = None
             updates["sales_stage"] = SalesStage.INTENT
+            all_prods = [_build_product_card(p) for p in catalog.get("products", []) if p.get("sku") and is_active(p)]
             action = {
                 "action": "SHOW_CATEGORIES",
                 "categories": catalog_categories(catalog),
+                "products": all_prods,
+                "count": len(all_prods),
                 "show_all": SHOW_ALL_OPTION,
-                "message": "No problem! What are you looking for today?",
+                "message": "No problem! Take a look around. Tap any category, or just ask me anything.",
             }
             return current_state.with_updates(**updates), action
 
@@ -511,11 +571,14 @@ def _determine_sales_transition(
         if name:
             updates["customer_name"] = name
             updates["sales_stage"] = SalesStage.INTENT
+            all_prods = [_build_product_card(p) for p in catalog.get("products", []) if p.get("sku") and is_active(p)]
             action = {
                 "action": "SHOW_CATEGORIES",
                 "categories": catalog_categories(catalog),
+                "products": all_prods,
+                "count": len(all_prods),
                 "show_all": SHOW_ALL_OPTION,
-                "message": f"Nice to meet you, {name}! What are you looking for today?",
+                "message": f"Nice to meet you, {name}! Have a look at our collection. Tap a category, or ask me anything.",
             }
             return current_state.with_updates(**updates), action
 
@@ -564,7 +627,7 @@ def _determine_sales_transition(
         action = {
             "action": "REQUEST_HUMAN",
             "reason": "customer_requested",
-            "message": "Store associate requested by customer.",
+            "message": "Of course! I've called a store associate for you. They'll be here shortly.",
         }
         return current_state.with_updates(**updates), action
     if extracted_name:
@@ -667,6 +730,8 @@ def _determine_sales_transition(
                 for v in variants if v.get("id") and v.get("sku")
             ]
 
+            cust_name = current_state.customer_name
+            great_choice = f"Great choice, {cust_name}! " if cust_name else "Great choice! "
             action = {
                 "action": "SHOW_PRODUCT",
                 "sku": prod_sku,
@@ -689,7 +754,7 @@ def _determine_sales_transition(
                     "product_url": specific_prod.get("product_url", ""),
                     "variants": verified_variants,
                 },
-                "message": f"Here is our {specific_prod.get('name')}. Would you like to see its colours, price or other details?",
+                "message": f"{great_choice}Here is our {specific_prod.get('name')}. Would you like to see its colours, price or other details?",
             }
             return current_state.with_updates(**updates), action
 
@@ -703,7 +768,7 @@ def _determine_sales_transition(
             "products": prod_cards,
             "count": len(prod_cards),
             "category": "All Products",
-            "message": "Here is our full collection. Which product would you like to see?",
+            "message": "Here is our full collection. Which one catches your eye?",
         }
         updates["interested_skus"] = tuple(p["sku"] for p in all_products)
         return current_state.with_updates(**updates), action
@@ -711,20 +776,61 @@ def _determine_sales_transition(
     # ── 12. Structured Category Selection: "select_category:<id>" ─────────────
     if "select_category:" in msg:
         cat_id = msg.split("select_category:")[1].strip()
+        cat_id_clean = cat_id.lower().strip()
         options = {option['id']: option['name'] for option in catalog_categories(catalog)}
-        if cat_id not in options:
-            raise GuidedCommandError('Unknown category.')
-        cat_name = options[cat_id]
+        for option in catalog_categories(catalog):
+            options[option['name'].lower()] = option['name']
+            options[option['id'].lower()] = option['name']
+
+        if cat_id_clean in ("all", "all-products", "all products"):
+            cat_name = "All Products"
+            matching = [p for p in catalog.get('products', []) if p.get('sku') and is_active(p)]
+        elif cat_id_clean in options:
+            cat_name = options[cat_id_clean]
+            matching = [p for p in catalog.get('products', []) if p.get('category') == cat_name and is_active(p)]
+        else:
+            matching = [
+                p for p in catalog.get('products', [])
+                if is_active(p) and (
+                    cat_id_clean in (p.get('category') or '').lower()
+                    or cat_id_clean in (p.get('name') or '').lower()
+                    or (p.get('category') or '').lower() in cat_id_clean
+                )
+            ]
+            if matching:
+                cat_name = matching[0].get('category') or cat_id.replace('-', ' ').title()
+            else:
+                cat_name = cat_id.replace('-', ' ').title()
+                matching = []
+
         updates['sales_stage'] = SalesStage.RECOMMENDATION
         updates['selected_category'] = cat_name
-        matching = [p for p in catalog.get('products', []) if p.get('category') == cat_name]
         prod_cards = [_build_product_card(p) for p in matching]
+
+        count = len(matching)
+        names = [p.get("name") for p in matching if p.get("name")]
+        if count == 0:
+            cat_msg = f"I couldn't find any products in {cat_name} right now. Would you like to see our full collection?"
+        elif count == 1:
+            cat_msg = f"In {cat_name}, we have {names[0]}. Would you like to check it out?"
+        elif count == 2:
+            cat_msg = f"In {cat_name}, we have 2 products: {names[0]} and {names[1]}. Which one would you like to see?"
+        elif count <= 4:
+            names_str = ", ".join(names[:-1]) + " and " + names[-1]
+            cat_msg = f"In {cat_name}, we have {count} products: {names_str}. Which one would you like to explore?"
+        else:
+            names_sample = ", ".join(names[:3])
+            cat_msg = f"In {cat_name}, we have {count} products, including {names_sample}. Which one would you like to explore?"
+
+        if current_state.customer_name:
+            cat_msg = f"{current_state.customer_name}, {cat_msg[0].lower() + cat_msg[1:]}"
+
         action = {
             "action": "SHOW_PRODUCTS",
             "products": prod_cards,
             "count": len(prod_cards),
             "category": cat_name,
-            "message": f"Here are our {cat_name} options. Which one would you like to explore?",
+            "message": cat_msg,
         }
         updates["interested_skus"] = tuple(p["sku"] for p in matching)
         return current_state.with_updates(**updates), action
@@ -747,7 +853,7 @@ def _determine_sales_transition(
                 "products": prod_cards,
                 "count": len(prod_cards),
                 "occasion": occ_label,
-                "message": f"Here are some great options for {occ_label}. Which one would you like to see?",
+                "message": f"Here are some lovely options for {occ_label}. Which one would you like to see?",
             }
             updates["interested_skus"] = tuple(p["sku"] for p in matching)
             return current_state.with_updates(**updates), action
@@ -813,7 +919,7 @@ def _greeting(state):
     state = state.with_updates(sales_stage=SalesStage.GREETING, guided_mode=True, greeting_speech_id=speech_id)
     return state, {'action': 'SHOW_CATEGORIES', 'categories': [], 'input_enabled': False,
                    'awaiting_speech_done': True, 'speech_id': speech_id,
-                   'message': "Hi! I'm Greeny from Green Fibre. Welcome!"}
+                   'message': "Hi! I'm Greeny, your shopping guide at Green Fibre. I'm here to help you discover our eco-friendly products, made from rice husk."}
 
 
 def determine_sales_transition(current_state, user_message, tool_outputs=None, catalog=None, command=None):
@@ -827,8 +933,8 @@ def determine_sales_transition(current_state, user_message, tool_outputs=None, c
         if current_state.sales_stage != SalesStage.GREETING or not current_state.greeting_speech_id or command.get('speech_id') != current_state.greeting_speech_id:
             raise GuidedCommandError('Speech acknowledgement does not match the pending greeting.')
         next_state = current_state.with_updates(sales_stage=SalesStage.ASK_NAME, greeting_speech_id=None)
-        screen = {'action': 'ASK_NAME', 'prompt': 'What should I call you?', 'skip_allowed': True,
-                  'message': 'What should I call you?'}
+        screen = {'action': 'ASK_NAME', 'prompt': 'Before we start, may I know your name?', 'skip_allowed': True,
+                  'message': 'Before we start, may I know your name?'}
     elif action == 'RESTART' or msg in ('restart', 'start over', 'shuru se'):
         clean = SalesState(session_id=current_state.session_id, kiosk_id=current_state.kiosk_id, channel=current_state.channel,
                            processed_event_ids=current_state.processed_event_ids)
@@ -846,19 +952,7 @@ def determine_sales_transition(current_state, user_message, tool_outputs=None, c
             raise GuidedCommandError('Complete the greeting first.')
         if catalog is None:
             try:
-                repository = get_product_repository()
-                snapshot = repository.catalog()
-                products = []
-                for candidate in snapshot.get('products', []):
-                    if not candidate.get('sku'):
-                        continue
-                    fresh = repository.get(candidate['sku'])
-                    if fresh and is_active(fresh):
-                        view = product_view(fresh)
-                        if fresh.get('source') == 'greenfibre_api' and view['stock_status'] != 'in_stock':
-                            continue
-                        products.append({**fresh, **view})
-                catalog = {'products': products}
+                catalog = get_verified_catalog()
             except Exception:
                 raise ProductAPIError('Current product information is unavailable.') from None
         # Exact displayed category names have the same meaning for text, ASR and taps.
@@ -868,22 +962,54 @@ def determine_sales_transition(current_state, user_message, tool_outputs=None, c
             if msg in (name, 'show ' + name, 'show me ' + name, 'show ' + name + 's'):
                 normalized = 'select_category:' + category['id']
                 break
-        if action == 'SELECT_CATEGORY' and command['category_id'] not in {c['id'] for c in catalog_categories(catalog)}:
-            raise GuidedCommandError('Unknown category.')
+        if action == 'SELECT_CATEGORY':
+            cat_req = (command.get('category_id') or command.get('category_name') or '').strip().lower()
+            cat_map = {c['id'].lower(): c['id'] for c in catalog_categories(catalog)}
+            cat_map.update({c['name'].lower(): c['id'] for c in catalog_categories(catalog)})
+            cat_map['all'] = 'all'
+            for p in catalog.get('products', []):
+                p_cat = str(p.get('category', '')).strip().lower()
+                if p_cat:
+                    p_cat_slug = re.sub(r'[^a-z0-9]+', '-', p_cat).strip('-')
+                    cat_map[p_cat] = p_cat_slug
+                    cat_map[p_cat_slug] = p_cat_slug
+            if cat_req not in cat_map and not any(cat_req in k for k in cat_map):
+                raise GuidedCommandError('Unknown category.')
         exact_products = [p for p in catalog.get('products', []) if msg in (
             str(p.get('sku', '')).lower(), str(p.get('name', '')).lower(),
             'tell me about ' + str(p.get('name', '')).lower(),
         )]
-        selected = find_specific_product('select_product:' + command['sku'], catalog) if action == 'SELECT_PRODUCT' else exact_products[0] if len(exact_products) == 1 else None
+        target_prod = (command.get('sku') or command.get('product_name') or command.get('name') or '') if command else ''
+        selected = find_specific_product('select_product:' + target_prod, catalog) if action == 'SELECT_PRODUCT' else exact_products[0] if len(exact_products) == 1 else None
+        if not selected and action == 'SELECT_PRODUCT' and target_prod:
+            selected = find_specific_product(target_prod, catalog)
         if selected:
             view = product_view(selected)
             next_state = current_state.with_updates(selected_skus=(view['sku'],), sales_stage=SalesStage.RECOMMENDATION)
+            p_name = view.get('name', 'this product')
+            price_val = view.get('price')
+            price_str = f" for ₹{int(float(price_val))}" if valid_price(price_val) else ""
+            desc = selected.get('shortDescription') or selected.get('description') or view.get('description') or ''
+            desc_clean = re.sub(r'<[^>]+>', ' ', str(desc)).strip()
+            desc_clean = re.sub(r'\s+', ' ', desc_clean)
+            first_sent = desc_clean.split('.')[0].strip() if desc_clean else ""
+            pitch = f" {first_sent}." if first_sent and len(first_sent) > 5 else ""
+            cust_name = current_state.customer_name
+            great_choice = f"Great choice, {cust_name}! " if cust_name else "Great choice! "
             screen = {'action': 'SHOW_PRODUCT', 'sku': view['sku'], 'product': view,
-                      'message': f"Here is our {view['name']}. Would you like to see its colours, price or other details?"}
+                      'message': f"{great_choice}Here is our {p_name}{price_str}.{pitch} Would you like to see its colours, price or other details?"}
         elif action == 'SET_NAME':
-            next_state = current_state.with_updates(customer_name=command['name'].title(), sales_stage=SalesStage.INTENT)
-            screen = {'action': 'SHOW_CATEGORIES', 'categories': catalog_categories(catalog), 'show_all': SHOW_ALL_OPTION,
-                      'message': f"Nice to meet you, {command['name']}! What are you looking for today?"}
+            name_val = command['name'].title()
+            all_prods = [_build_product_card(p) for p in catalog.get("products", []) if p.get("sku") and is_active(p)]
+            next_state = current_state.with_updates(customer_name=name_val, sales_stage=SalesStage.INTENT)
+            screen = {
+                'action': 'SHOW_CATEGORIES',
+                'categories': catalog_categories(catalog),
+                'products': all_prods,
+                'count': len(all_prods),
+                'show_all': SHOW_ALL_OPTION,
+                'message': f"Nice to meet you, {name_val}! Have a look at our collection. Tap a category, or ask me anything.",
+            }
         else:
             next_state, screen = _determine_sales_transition(current_state, normalized, tool_outputs, catalog)
         if action == 'SELECT_PRODUCT' and (not screen or screen.get('action') != 'SHOW_PRODUCT'):

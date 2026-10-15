@@ -17,5 +17,5 @@ if __name__ == "__main__":
         "main:api",
         host=settings.host,
         port=settings.port,
-        reload=False,
+        reload=settings.environment != "production",
     )
