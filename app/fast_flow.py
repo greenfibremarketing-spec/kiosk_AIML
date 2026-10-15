@@ -239,6 +239,22 @@ def fast_transition(
             return _step_select_category(ctx, session_id, f"select_category:{target}", f"select_category:{target}".lower())
         if cmd_action == "SHOW_ALL":
             return _step_select_category(ctx, session_id, "show all", "show all")
+        if cmd_action == "NAVIGATE_BACK":
+            ctx.stage = "CATEGORY"
+            ctx.selected_sku = None
+            ctx.product_index = 0
+            reply = "No rush! Take your time, there's lots more to explore."
+            cats = _categories(ctx.products) if ctx.products else []
+            return (
+                reply,
+                _wrap(ctx, "SHOW_PRODUCTS", {
+                    "products": [_card(p) for p in (ctx.cat_products or ctx.products)],
+                    "count": len(ctx.cat_products or ctx.products),
+                    "category": "our full collection",
+                    "message": reply,
+                }, buttons=_category_buttons(cats) if cats else None),
+                current_sales_state,
+            )
         if cmd_action == "SPEECH_DONE":
             if ctx.stage in ("WAKE", "GREETING"):
                 return _step_ask_name(ctx, session_id)
@@ -454,6 +470,23 @@ def _step_select_category(
 def _step_product_action(
     ctx: FastFlowContext, session_id: str, msg: str, ml: str,
 ) -> Tuple[str, Dict[str, Any], None]:
+
+    if ml in ("back", "go back", "previous", "navigate_back", "peeche", "chodo", "cancel"):
+        ctx.stage = "CATEGORY"
+        ctx.selected_sku = None
+        ctx.product_index = 0
+        reply = "No rush! Take your time, there's lots more to explore."
+        cats = _categories(ctx.products) if ctx.products else []
+        return (
+            reply,
+            _wrap(ctx, "SHOW_PRODUCTS", {
+                "products": [_card(p) for p in (ctx.cat_products or ctx.products)],
+                "count": len(ctx.cat_products or ctx.products),
+                "category": "our full collection",
+                "message": reply,
+            }, buttons=_category_buttons(cats) if cats else None),
+            None,
+        )
 
     if ml in ("next", "next_product", "another", "next one", "show next", "agla", "aur dikhao"):
         ctx.product_index = (ctx.product_index + 1) % max(len(ctx.cat_products), 1)

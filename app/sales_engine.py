@@ -498,7 +498,7 @@ def _determine_sales_transition(
                 "action": "SHOW_PRODUCTS",
                 "products": prod_cards,
                 "count": len(prod_cards),
-                "message": "Of course. Which one would you like to explore?",
+                "message": "No rush! Take your time, there's lots more to explore.",
             }
             return current_state.with_updates(**updates), action
         elif current_state.sales_stage in (SalesStage.RECOMMENDATION, SalesStage.PRODUCT_DISCOVERY, SalesStage.SHOW_PRODUCTS, SalesStage.B2B_QUALIFICATION, SalesStage.QUOTE_REQUEST, SalesStage.HUMAN_HANDOFF):
