@@ -757,15 +757,20 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
         if is_fast_flow:
             ff_keywords = (
                 'next_product', 'next', 'cheaper', 'compare', 'select_category:',
-                'select_product:', 'buy:', 'checkout', 'goodbye', 'show all',
-                'show_all', 'restart', 'start over', 'call staff', 'help',
-                'skip', 'skip name', 'speech_done', 'greeting_done', 'hello',
+                'select_category', 'select_product:', 'select_product',
+                'buy:', 'buy', "i'll take it", "ill take it", 'add to cart',
+                'checkout', 'go to checkout', 'confirm', 'yes', 'haan', 'ha',
+                'goodbye', 'bye', 'thanks', 'thank you', 'all done', 'done',
+                'show all', 'show_all', 'restart', 'start over', 'call staff',
+                'help', 'skip', 'skip name', 'speech_done', 'greeting_done',
+                'hello', 'hi', 'hey', 'namaste', 'more info', 'details',
+                'keep shopping', 'back', 'go back',
             )
-            use_fast = command is not None or any(message.lower().startswith(kw) for kw in ff_keywords)
+            use_fast = command is not None or any(message.lower().strip().startswith(kw) for kw in ff_keywords)
             try:
                 from app.fast_flow import get_ff
                 ctx = get_ff(session_id)
-                if ctx.stage in ('WAKE', 'GREETING', 'NAME'):
+                if ctx.stage in ('WAKE', 'GREETING', 'NAME', 'BUY'):
                     use_fast = True
             except Exception:
                 pass

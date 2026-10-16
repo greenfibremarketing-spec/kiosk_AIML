@@ -400,6 +400,22 @@ def _step_select_category(
             ctx.selected_sku = matched.get("sku")
             return _show_specific_product(ctx, matched)
 
+    if ml in ("next", "next_product", "another", "next one", "show next", "agla", "aur dikhao"):
+        if ctx.cat_products:
+            ctx.stage = "PRODUCT"
+            return _show_current_product(ctx)
+
+    if ml in ("cheaper", "something cheaper", "less expensive", "sasta", "budget", "cheaper option"):
+        if ctx.cat_products:
+            ctx.stage = "PRODUCT"
+            return _step_product_action(ctx, session_id, msg, ml)
+
+    buy_phrases = ("buy", "i'll take it", "ill take it", "add to cart", "purchase", "buy it", "le lo")
+    if ml.startswith("buy:") or ml in buy_phrases:
+        if ctx.cat_products:
+            ctx.stage = "PRODUCT"
+            return _step_product_action(ctx, session_id, msg, ml)
+
     cat_id: Optional[str] = None
     if ml.startswith("select_category:"):
         cat_id = ml.split(":", 1)[1].strip()
