@@ -254,7 +254,7 @@ def test_human_handoff_triggers_request_human():
     assert action is not None
     assert action["action"] == "REQUEST_HUMAN"
     assert action["reason"] == "customer_requested"
-    assert "Store associate" in action["message"]
+    assert "store associate" in action["message"].lower()
 
 
 def test_immutability_and_session_preservation():

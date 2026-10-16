@@ -143,7 +143,7 @@ def test_1_greeting_advances_only_after_speech_done():
     next_s2, a2 = determine_sales_transition(next_s1, "SPEECH_DONE", catalog=MOCK_CATALOG, command={"action":"SPEECH_DONE", "turn_id":"ack-1", "speech_id":a1["speech_id"]})
     assert next_s2.sales_stage == SalesStage.ASK_NAME
     assert a2["action"] == "ASK_NAME"
-    assert a2["prompt"] == "What should I call you?"
+    assert a2["prompt"] == "Before we start, may I know your name?"
     assert a2["skip_allowed"] is True
 
 

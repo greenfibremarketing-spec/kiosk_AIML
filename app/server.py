@@ -53,6 +53,7 @@ from app.sessions import session_manager
 from app.storage import DatabaseConnectionError
 from app.tools import _load_catalog
 from app.greenfibre_repository import ProductAPIError
+from app.fast_flow import fast_transition, silence_tick, drop_ff
 
 # Thread pool for running sync LangGraph brain in async context
 _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -254,6 +255,17 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.warning("RAG warmup failed: category=%s", type(e).__name__)
+    try:
+        from app.sales_engine import get_verified_catalog
+        t_cat = time.time()
+        w_cat = get_verified_catalog()
+        logger.info(
+            "Catalog warmup complete (Total: %.1fms, Products: %d)",
+            (time.time() - t_cat) * 1000,
+            len(w_cat.get("products", [])),
+        )
+    except Exception as e:
+        logger.warning("Catalog warmup failed: category=%s", type(e).__name__)
     yield
     logger.info("Shutting down Greenie API...")
 
@@ -454,11 +466,13 @@ def chat_endpoint(request: Request, body: ChatRequest) -> ChatResponse:
             turn_id=body.turn_id,
             action=turn.action,
         )
-    except GuidedCommandError:
+    except GuidedCommandError as exc:
+        logger.warning("Chat 409 (GuidedCommandError) [session=%s]: %s", sid, exc)
         raise HTTPException(status_code=409, detail="Command is invalid for the current stage or already processed.") from None
     except ProductAPIError:
         raise HTTPException(status_code=503, detail={"code": "product_data_unavailable", "invalidate_product_facts": True}) from None
     except SessionBusyError:
+        logger.warning("Chat 409 (SessionBusyError) [session=%s]: session is busy (concurrent request while turn lock held)", sid)
         raise HTTPException(status_code=409, detail="Session is busy; retry after the current turn.") from None
     except CrossKioskAccessError as e:
         logger.warning("Cross-kiosk access denied: %s", type(e).__name__)
@@ -483,6 +497,17 @@ def get_products() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Catalogue is temporarily unavailable.") from None
 
 
+@api.get("/pairups")
+def get_pairups(product_id: Optional[str] = "", cart: Optional[str] = "") -> List[Dict[str, Any]]:
+    """Return 3 to 4 pair-up recommendations for a given product, excluding cart items."""
+    try:
+        from app.recommendation import get_pairup_recommendations
+        return get_pairup_recommendations(product_id=product_id or "", cart=cart or "")
+    except Exception as e:
+        logger.error("Pair-ups failed: %s", e)
+        return []
+
+
 @api.post("/session/reset")
 @api.post("/v1/session/reset", include_in_schema=False)
 def reset_session(request: Request, body: SessionResetRequest) -> Dict[str, str]:
@@ -494,11 +519,13 @@ def reset_session(request: Request, body: SessionResetRequest) -> Dict[str, str]
             session_manager.reset_session(body.session_id, kiosk_id=kiosk_id)
         # Also clear any dangling cancel flag
         _cancel_flags.pop(body.session_id, None)
-    except GuidedCommandError:
+    except GuidedCommandError as exc:
+        logger.warning("Reset 409 (GuidedCommandError) [session=%s]: %s", body.session_id, exc)
         raise HTTPException(status_code=409, detail="Command is invalid for the current stage or already processed.") from None
     except ProductAPIError:
         raise HTTPException(status_code=503, detail={"code": "product_data_unavailable", "invalidate_product_facts": True}) from None
     except SessionBusyError:
+        logger.warning("Reset 409 (SessionBusyError) [session=%s]: session is busy (turn lock held)", body.session_id)
         raise HTTPException(status_code=409, detail="Session is busy; retry after the current turn.") from None
     except CrossKioskAccessError as e:
         logger.warning("Cross-kiosk reset denied: %s", type(e).__name__)
@@ -679,10 +706,91 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 if not disconnected.is_set():
                     await ws_manager.send_json(websocket, _ws_envelope(kind, data, meta=meta, v2=is_v2))
 
+    is_fast_flow = websocket.query_params.get('flow') == 'fast' or websocket.query_params.get('auto_greet') in ('1', 'true', 'yes') or session_id.startswith('fast-')
+    auto_greet = websocket.query_params.get('auto_greet') in ('1', 'true', 'yes') or (session_id.startswith('fast-') and websocket.query_params.get('auto_greet') != 'false')
+
+    # ── Auto-greet: kiosk starts the conversation without waiting for the user ──
+    if auto_greet:
+        try:
+            def _greet():
+                return fast_transition(session_id, "hello")
+            _g_reply, _g_action, _ = await asyncio.get_running_loop().run_in_executor(
+                _thread_pool, _greet
+            )
+            auto_turn_id = "auto-greet-0"
+            if is_v2 and _g_action:
+                await send('action', _g_action, {'turn_id': auto_turn_id})
+            for _w in _g_reply.split():
+                await send('token', _w + ' ')
+            await send('done', _g_reply,
+                       {'session_id': session_id, 'turn_id': auto_turn_id,
+                        'sales_stage': 'GREETING', 'action': _g_action} if is_v2 else None)
+        except Exception as _ge:
+            logger.warning('Auto-greet failed: %s', type(_ge).__name__)
+
+    # ── Silence detection: pushed every 30 s of no WS activity ─────────────
+    _SILENCE_INTERVAL = 30.0
+    _last_activity: list = [asyncio.get_event_loop().time()]
+
+    async def silence_watcher():
+        while not disconnected.is_set():
+            await asyncio.sleep(_SILENCE_INTERVAL)
+            if disconnected.is_set():
+                break
+            idle = asyncio.get_event_loop().time() - _last_activity[0]
+            if idle >= _SILENCE_INTERVAL - 0.5:
+                frame = silence_tick(session_id)
+                await send(frame['type'], frame['data'])
+                if frame['type'] == 'auto_reset':
+                    break
+
+    silence_task = None
+    if is_fast_flow:
+        silence_task = asyncio.create_task(silence_watcher())
+
     async def execute(message, turn_id, command=None):
-        # Inference and generator iteration both run off the receive loop.
-        # The provider is synchronous: cancellation suppresses output, it does
-        # not kill a thread or claim that provider billing/work has stopped.
+        _last_activity[0] = asyncio.get_event_loop().time()
+        # ── Fast-flow path: button actions and guided commands ────────────
+        # fast_transition handles NEXT_PRODUCT/CHEAPER/BUY/COMPARE/etc.
+        # without invoking the LLM, keeping response time < 100 ms.
+        use_fast = False
+        if is_fast_flow:
+            ff_keywords = (
+                'next_product', 'next', 'cheaper', 'compare', 'select_category:',
+                'select_product:', 'buy:', 'checkout', 'goodbye', 'show all',
+                'show_all', 'restart', 'start over', 'call staff', 'help',
+                'skip', 'skip name', 'speech_done', 'greeting_done', 'hello',
+            )
+            use_fast = command is not None or any(message.lower().startswith(kw) for kw in ff_keywords)
+            try:
+                from app.fast_flow import get_ff
+                ctx = get_ff(session_id)
+                if ctx.stage in ('WAKE', 'GREETING', 'NAME'):
+                    use_fast = True
+            except Exception:
+                pass
+
+        if use_fast:
+            try:
+                def _ff_call():
+                    return fast_transition(session_id, message, command=command)
+                reply, ff_action, _ = await asyncio.get_running_loop().run_in_executor(
+                    _thread_pool, _ff_call
+                )
+                if cancelled.is_set() or disconnected.is_set():
+                    return
+                if is_v2 and ff_action:
+                    await send('action', ff_action, {'turn_id': turn_id})
+                for word in reply.split():
+                    await send('token', word + ' ')
+                await send('done', reply, {'session_id': session_id, 'turn_id': turn_id,
+                                           'sales_stage': ff_action.get('action') if ff_action else None,
+                                           'action': ff_action} if is_v2 else None)
+                return
+            except Exception as exc:
+                logger.warning('fast_flow error, falling back to brain: %s', type(exc).__name__)
+
+        # ── LLM brain path: free-text speech / product questions ─────────
         inference_slot = None
         for index in range(settings.max_inflight_turns):
             try:
@@ -768,6 +876,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             if payload.get('v') == 2:
                 is_v2 = True
             if payload.get('type') == 'ping':
+                _last_activity[0] = asyncio.get_event_loop().time()
                 await send('pong', '')
                 continue
             if payload.get('type') == 'cancel':
@@ -812,8 +921,11 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
     finally:
         disconnected.set()
         cancelled.set()
+        if silence_task and not silence_task.done():
+            silence_task.cancel()
         ws_manager.disconnect(session_id)
         _cancel_flags.pop(session_id, None)
+        drop_ff(session_id)  # clean up fast-flow context on disconnect
         if connection_token:
             try:
                 coordinator.release('connection:' + session_id, connection_token)
