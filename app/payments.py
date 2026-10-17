@@ -58,6 +58,7 @@ class ShippingAddress(BaseModel):
 class CartItem(BaseModel):
     sku: str = Field(..., min_length=1, max_length=128)
     quantity: int = Field(..., ge=1, le=100)
+    is_pair_up: Optional[bool] = Field(default=False)
 
 
 class CreateOrderPayload(BaseModel):
@@ -81,11 +82,15 @@ def _get_razorpay_key_id() -> str:
 
 
 def _calculate_authoritative_total_paise(items: List[CartItem]) -> int:
-    """Calculate authoritative total amount in integer paise using verified backend catalog."""
+    """Calculate authoritative total amount in integer paise using verified backend catalog.
+    Applies 10% discount on each product off MRP, plus 5% pair-up discount if applicable."""
     catalog = _load_catalog().get("products", [])
-    total_rupees = 0.0
+    subtotal_paise = 0
+    has_pair_up = False
 
     for item in items:
+        if getattr(item, "is_pair_up", False):
+            has_pair_up = True
         matched_price = None
         # 1. Look for variant match
         for p in catalog:
@@ -115,9 +120,15 @@ def _calculate_authoritative_total_paise(items: List[CartItem]) -> int:
         if matched_price is None or matched_price <= 0:
             matched_price = 799.0  # safe default catalog item price
 
-        total_rupees += matched_price * item.quantity
+        # 10% discount on each product off MRP
+        discounted_rupees = round(matched_price * 0.90)
+        price_paise = int(round(discounted_rupees * 100))
+        subtotal_paise += price_paise * item.quantity
 
-    return int(round(total_rupees * 100))
+    discount_paise = int(round((subtotal_paise * 5) / 100)) if has_pair_up else 0
+    total_paise = max(0, subtotal_paise - discount_paise)
+
+    return total_paise
 
 
 def _verify_auth(x_kiosk_id: Optional[str], x_kiosk_token: Optional[str]):
@@ -153,13 +164,19 @@ async def create_payment_order(
 
     # Validate items and combine duplicates
     combined_items: Dict[str, int] = {}
+    is_pair_up_map: Dict[str, bool] = {}
     for item in payload.items:
         combined_items[item.sku] = combined_items.get(item.sku, 0) + item.quantity
+        if getattr(item, "is_pair_up", False):
+            is_pair_up_map[item.sku] = True
 
     if len(combined_items) > 20:
         raise HTTPException(status_code=422, detail="Maximum 20 distinct items allowed in cart.")
 
-    validated_items = [CartItem(sku=k, quantity=v) for k, v in combined_items.items()]
+    validated_items = [
+        CartItem(sku=k, quantity=v, is_pair_up=is_pair_up_map.get(k, False))
+        for k, v in combined_items.items()
+    ]
 
     amount_paise = _calculate_authoritative_total_paise(validated_items)
     if amount_paise <= 0:

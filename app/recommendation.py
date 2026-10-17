@@ -59,15 +59,17 @@ def _product_card(p: Dict[str, Any]) -> Dict[str, Any]:
     images = merged.get("images") or []
     image = (images[0] if images else None) or merged.get("image") or ""
     try:
-        price = float(merged.get("price") or merged.get("salePrice") or 0)
+        raw_mrp = float(merged.get("mrp") or merged.get("price") or merged.get("salePrice") or 0)
     except Exception:
-        price = 0
+        raw_mrp = 0
+    sale_price = round(raw_mrp * 0.90) if raw_mrp > 0 else 0
     return {
         "sku": merged.get("sku") or "",
         "id": merged.get("id") or merged.get("sku") or "",
         "name": merged.get("name") or "",
-        "price": price,
-        "salePrice": price,
+        "price": raw_mrp,
+        "mrp": raw_mrp,
+        "salePrice": sale_price,
         "image": image,
         "images": images,
         "category": merged.get("category") or "",
@@ -401,9 +403,11 @@ def get_pairup_recommendations(
     results = []
     for p in picked:
         try:
-            price = float(p.get("salePrice") or p.get("price") or 0)
+            raw_mrp = float(p.get("mrp") or p.get("price") or p.get("salePrice") or 0)
         except Exception:
-            price = 0.0
+            raw_mrp = 0.0
+
+        sale_price = round(raw_mrp * 0.90) if raw_mrp > 0 else 0.0
 
         images = p.get("images") or []
         image = (images[0] if images else None) or p.get("image") or ""
@@ -412,7 +416,9 @@ def get_pairup_recommendations(
             "id": str(p.get("id") or p.get("sku") or ""),
             "sku": str(p.get("sku") or p.get("id") or ""),
             "name": str(p.get("name") or ""),
-            "price": price,
+            "price": raw_mrp,
+            "mrp": raw_mrp,
+            "salePrice": sale_price,
             "image": image,
             "info": _build_info_text(p),
         })
