@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from app.sales_state import SalesStage, SalesState
 from app.tools import _load_catalog, get_product_repository
 from app.product_repository import product_view, is_active, valid_price
+from app.product_speech import build_product_speech
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
@@ -754,7 +755,7 @@ def _determine_sales_transition(
                     "product_url": specific_prod.get("product_url", ""),
                     "variants": verified_variants,
                 },
-                "message": f"{great_choice}Here is our {specific_prod.get('name')}. Would you like to see its colours, price or other details?",
+                "message": build_product_speech(specific_prod, customer_name=current_state.customer_name)[1],
             }
             return current_state.with_updates(**updates), action
 
@@ -994,10 +995,8 @@ def determine_sales_transition(current_state, user_message, tool_outputs=None, c
             desc_clean = re.sub(r'\s+', ' ', desc_clean)
             first_sent = desc_clean.split('.')[0].strip() if desc_clean else ""
             pitch = f" {first_sent}." if first_sent and len(first_sent) > 5 else ""
-            cust_name = current_state.customer_name
-            great_choice = f"Great choice, {cust_name}! " if cust_name else "Great choice! "
             screen = {'action': 'SHOW_PRODUCT', 'sku': view['sku'], 'product': view,
-                      'message': f"{great_choice}Here is our {p_name}{price_str}.{pitch} Would you like to see its colours, price or other details?"}
+                      'message': build_product_speech({**selected, **view}, customer_name=current_state.customer_name)[1]}
         elif action == 'SET_NAME':
             name_val = command['name'].title()
             all_prods = [_build_product_card(p) for p in catalog.get("products", []) if p.get("sku") and is_active(p)]

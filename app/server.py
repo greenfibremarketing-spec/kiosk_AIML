@@ -39,8 +39,9 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from app.guided_contract import ConversationInput, GuidedCommandError
+from app.conversation_agent import warmup_conversation_agent
 import uvicorn
 
 from app.brain import ask_avatar, ask_avatar_stream, ask_avatar_turn, AvatarTurnResult
@@ -332,8 +333,11 @@ async def validation_error(request, exc):
 
 
 class ChatRequest(ConversationInput):
+    model_config = ConfigDict(extra='ignore', str_strip_whitespace=True)
     session_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_.:-]+$')
     kiosk_id: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_.:-]+$')
+    stt_final_ts: Optional[float] = None
+    client_sent_ts: Optional[float] = None
 
     @model_validator(mode='after')
     def command_session(self):
@@ -519,6 +523,11 @@ def reset_session(request: Request, body: SessionResetRequest) -> Dict[str, str]
             session_manager.reset_session(body.session_id, kiosk_id=kiosk_id)
         # Also clear any dangling cancel flag
         _cancel_flags.pop(body.session_id, None)
+        try:
+            from app.fast_flow import drop_ff
+            drop_ff(body.session_id)
+        except Exception:
+            pass
     except GuidedCommandError as exc:
         logger.warning("Reset 409 (GuidedCommandError) [session=%s]: %s", body.session_id, exc)
         raise HTTPException(status_code=409, detail="Command is invalid for the current stage or already processed.") from None
@@ -693,12 +702,36 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
         return
 
     await ws_manager.connect(session_id, websocket)
+    asyncio.create_task(warmup_conversation_agent())
     is_v2 = websocket.query_params.get('v') == '2' or websocket.query_params.get('proto') == '2'
     disconnected = Event()
     cancelled = Event()
     running = None
     current_id = None
     send_lock = asyncio.Lock()
+
+    def _sync_screen_from_action(ctx, action: Optional[Dict[str, Any]]):
+        if not ctx or not isinstance(action, dict):
+            return
+        act = action.get("action")
+        if act == "SHOW_CATEGORIES":
+            ctx.current_screen = {"type": "categories", "category": None, "sku": None}
+            ctx.categories_shown_at = time.time()
+        elif act == "SHOW_PRODUCTS":
+            ctx.current_screen = {"type": "list", "category": action.get("category"), "sku": None}
+            prods = action.get("products", [])
+            skus = [p.get("sku") for p in prods if isinstance(p, dict) and p.get("sku")]
+            if skus:
+                ctx.last_list_skus = skus
+        elif act == "SHOW_PRODUCT":
+            sku = action.get("sku") or (action.get("product", {}).get("sku") if isinstance(action.get("product"), dict) else None)
+            ctx.current_screen = {"type": "product", "category": action.get("category"), "sku": sku}
+            if sku:
+                ctx.selected_sku = sku
+        elif act in ("SHOW_GREETING", "ASK_NAME"):
+            ctx.current_screen = {"type": "home", "category": None, "sku": None}
+        elif act in ("CONFIRM_BUY", "SHOW_CART"):
+            ctx.current_screen = {"type": "cart", "category": None, "sku": None}
 
     async def send(kind, data, meta=None):
         if not disconnected.is_set():
@@ -719,6 +752,8 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             )
             auto_turn_id = "auto-greet-0"
             if is_v2 and _g_action:
+                from app.fast_flow import get_ff
+                _sync_screen_from_action(get_ff(session_id), _g_action)
                 await send('action', _g_action, {'turn_id': auto_turn_id})
             for _w in _g_reply.split():
                 await send('token', _w + ' ')
@@ -728,8 +763,8 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
         except Exception as _ge:
             logger.warning('Auto-greet failed: %s', type(_ge).__name__)
 
-    # ── Silence detection: pushed every 30 s of no WS activity ─────────────
-    _SILENCE_INTERVAL = 30.0
+    # ── Silence detection: pushed every 8 s of no WS activity ─────────────
+    _SILENCE_INTERVAL = 8.0
     _last_activity: list = [asyncio.get_event_loop().time()]
 
     async def silence_watcher():
@@ -748,25 +783,54 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
     if is_fast_flow:
         silence_task = asyncio.create_task(silence_watcher())
 
-    async def execute(message, turn_id, command=None):
+    async def execute(message, turn_id, command=None, payload=None):
+        t_ws_recv = time.perf_counter()
         _last_activity[0] = asyncio.get_event_loop().time()
+        payload = payload or {}
+        stt_final_ts = payload.get('stt_final_ts')
+        client_sent_ts = payload.get('client_sent_ts')
+        stt_final_to_ws_sent = int(client_sent_ts - stt_final_ts) if (stt_final_ts and client_sent_ts and client_sent_ts >= stt_final_ts) else 0
+
+        first_frame_sent_ms = None
+        first_sentence_sent_ms = None
+        llm_first_token_ms = None
+        llm_done_ms = None
+        llm_start_ms = 0
+
         # ── Fast-flow path: button actions and guided commands ────────────
         # fast_transition handles NEXT_PRODUCT/CHEAPER/BUY/COMPARE/etc.
         # without invoking the LLM, keeping response time < 100 ms.
         use_fast = False
+        msg_clean = (message or "").strip().lower()
         if is_fast_flow:
             ff_keywords = (
                 'next_product', 'next', 'cheaper', 'compare', 'select_category:',
                 'select_product:', 'buy:', 'checkout', 'goodbye', 'show all',
                 'show_all', 'restart', 'start over', 'call staff', 'help',
-                'skip', 'skip name', 'speech_done', 'greeting_done', 'hello',
+                'skip', 'skip name', 'no name', 'just browse', 'speech_done', 'greeting_done', 'hello',
             )
-            use_fast = command is not None or any(message.lower().startswith(kw) for kw in ff_keywords)
+            use_fast = command is not None or any(msg_clean.startswith(kw) for kw in ff_keywords)
             try:
-                from app.fast_flow import get_ff
+                from app.fast_flow import get_ff, _extract_name
                 ctx = get_ff(session_id)
-                if ctx.stage in ('WAKE', 'GREETING', 'NAME'):
-                    use_fast = True
+                if ctx.stage in ('WAKE', 'GREETING'):
+                    if msg_clean in ('hello', 'hi', 'start', 'speech_done', 'greeting_done'):
+                        use_fast = True
+                elif ctx.stage == 'NAME':
+                    if command and command.get('action') in ('SET_NAME', 'SKIP_NAME'):
+                        use_fast = True
+                    elif msg_clean in ('skip', 'skip name', 'no name', 'just browse', 'next', 'no', 'nahi', 'pass'):
+                        use_fast = True
+                    else:
+                        extracted = _extract_name(message)
+                        # Only treat as name if it doesn't contain conversational intent words
+                        intent_keywords = (
+                            'gift', 'budget', 'under', 'below', 'bottle', 'mug', 'plate',
+                            'bowl', 'show', 'price', 'cost', 'kitchen', 'office', 'kids',
+                            'help', 'what', 'how', 'where', 'which', 'is', 'can', 'tell'
+                        )
+                        if extracted and not any(kw in msg_clean for kw in intent_keywords):
+                            use_fast = True
             except Exception:
                 pass
 
@@ -780,7 +844,14 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 if cancelled.is_set() or disconnected.is_set():
                     return
                 if is_v2 and ff_action:
+                    from app.fast_flow import get_ff
+                    _sync_screen_from_action(get_ff(session_id), ff_action)
                     await send('action', ff_action, {'turn_id': turn_id})
+                ff_act = ff_action.get("action") if ff_action else "NONE"
+                ff_sku = ff_action.get("sku") if ff_action else None
+                dec_log = f"[Decision] source=fast_flow action={ff_act} skus={[ff_sku] if ff_sku else []}"
+                logger.info(dec_log)
+                print(dec_log, flush=True)
                 for word in reply.split():
                     await send('token', word + ' ')
                 await send('done', reply, {'session_id': session_id, 'turn_id': turn_id,
@@ -788,74 +859,204 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                                            'action': ff_action} if is_v2 else None)
                 return
             except Exception as exc:
-                logger.warning('fast_flow error, falling back to brain: %s', type(exc).__name__)
+                logger.warning('fast_flow error, falling back to conversation agent: %s', type(exc).__name__)
 
-        # ── LLM brain path: free-text speech / product questions ─────────
-        inference_slot = None
-        for index in range(settings.max_inflight_turns):
-            try:
-                inference_token = coordinator.acquire(f'ws-inference-slot:{index}')
-                inference_slot = index
-                break
-            except SessionBusyError:
-                continue
-        if inference_slot is None:
-            await send('error', 'Backend is busy; please retry later.')
-            return
-
-        def generate():
-            stream = ask_avatar_stream(message=message, session_id=session_id, kiosk_id=verified_kiosk_id, **({"command": command} if command else {}))
-            action = getattr(stream, 'action', None)
-            stage = getattr(stream, 'sales_stage', None)
-            words = []
-            for word in stream:
-                if cancelled.is_set() or disconnected.is_set() or _cancel_flags.get(session_id):
-                    break
-                words.append(word)
-            return words, action, stage
-        def infer():
-            try:
-                return generate()
-            finally:
-                coordinator.release(f'ws-inference-slot:{inference_slot}', inference_token)
+        # ── Free-conversation agent path: intelligent conversational shopping ───
         try:
-            words, action, stage = await asyncio.get_running_loop().run_in_executor(_thread_pool, infer)
-            if cancelled.is_set() or disconnected.is_set():
-                return
-            if _cancel_flags.get(session_id):
-                await send('cancelled', '', {'turn_id': turn_id, 'provider_cancelled': False, 'output_suppressed': True})
-                return
-            if is_v2 and action:
-                await send('action', action, {'turn_id': turn_id})
-            full_reply = ''
-            sentence = ''
-            for word in words:
+            from app.fast_flow import get_ff
+            from app.sales_engine import get_verified_catalog
+            from app.conversation_agent import (
+                build_compact_catalog,
+                quick_match_intent,
+                stream_free_conversation,
+            )
+            ctx = get_ff(session_id)
+
+            # If user explicitly said skip / no name / just browse, mark name_status = "skipped"
+            if msg_clean in ('skip', 'skip name', 'no name', 'just browse'):
+                if ctx and ctx.name_status != 'given':
+                    ctx.name_status = 'skipped'
+                    ctx.name = None
+
+            try:
+                catalog = get_verified_catalog()
+            except Exception:
+                catalog = {"products": []}
+            all_products = catalog.get("products", [])
+            compact_catalog = build_compact_catalog(catalog)
+
+            current_ctx = {
+                "stage": ctx.stage if ctx else None,
+                "selected_sku": getattr(ctx, "selected_sku", None),
+                "current_screen": getattr(ctx, "current_screen", None),
+                "last_list_skus": getattr(ctx, "last_list_skus", None),
+                "name_status": getattr(ctx, "name_status", "unknown"),
+                "name_asked_count": getattr(ctx, "name_asked_count", 0),
+                "categories_shown_at": getattr(ctx, "categories_shown_at", 0),
+            } if ctx else {}
+
+            # Step 1: Instant deterministic navigation (<300 ms screen change)
+            quick_match = quick_match_intent(
+                customer_message=message,
+                current_stage=ctx.stage if ctx else "BROWSING",
+                current_context=current_ctx,
+                all_products=all_products,
+                customer_name=ctx.name if ctx else None,
+                current_screen=getattr(ctx, "current_screen", None),
+                last_list_skus=getattr(ctx, "last_list_skus", None),
+            )
+
+            instant_action = None
+            instant_opener = None
+            instant_stage = None
+            instant_skus = []
+
+            if quick_match:
+                instant_action, instant_opener, instant_stage, instant_skus = quick_match
+                if is_v2 and instant_action:
+                    _sync_screen_from_action(ctx, instant_action)
+                    logger.info("[Chat] frame_sent action=%s skus=%s", instant_action.get("action"), instant_skus)
+                    print(f"[Chat] frame_sent action={instant_action.get('action')} skus={instant_skus}", flush=True)
+                    await send('action', instant_action, {'turn_id': turn_id})
+                    first_frame_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
+
+                if instant_opener:
+                    await send('token', instant_opener + ' ')
+                    if is_v2:
+                        await send('sentence', instant_opener)
+                        first_sentence_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
+
+            # Step 2: Real LLM streaming for friendly explanation
+            t_llm_start = time.perf_counter()
+            llm_start_ms = int((t_llm_start - t_ws_recv) * 1000)
+
+            accumulated_reply = (instant_opener + " ") if instant_opener else ""
+            final_action = instant_action
+            final_stage = instant_stage or (ctx.stage if ctx else "BROWSING")
+
+            async for event_type, data in stream_free_conversation(
+                session_id=session_id,
+                customer_message=message,
+                current_stage=ctx.stage if ctx else "BROWSING",
+                customer_name=ctx.name if ctx else None,
+                current_context=current_ctx,
+                history=getattr(ctx, "history", None),
+                turn_id=turn_id,
+                all_products=all_products,
+                compact_catalog=compact_catalog,
+                instant_match=bool(instant_action),
+                expected_screen_action=instant_action,
+                name_status=getattr(ctx, "name_status", "unknown"),
+                name_asked_count=getattr(ctx, "name_asked_count", 0),
+                current_screen=getattr(ctx, "current_screen", None),
+                categories_shown_at=getattr(ctx, "categories_shown_at", 0.0),
+            ):
                 if cancelled.is_set() or disconnected.is_set():
                     return
-                if not word:
-                    continue
-                full_reply += word
-                sentence += word
-                await send('token', word)
-                if is_v2 and sentence.rstrip().endswith(('.', '!', '?', '।')):
-                    await send('sentence', sentence.strip())
-                    sentence = ''
-                await asyncio.sleep(0)
-            if cancelled.is_set() or disconnected.is_set():
-                return
-            if is_v2 and sentence.strip():
-                await send('sentence', sentence.strip())
-            await send('done', full_reply.strip(), {
-                'session_id': session_id, 'turn_id': turn_id,
-                'sales_stage': stage, 'action': action,
-            } if is_v2 else None)
-        except Exception as exc:
-            logger.error('WS turn failed: category=%s', type(exc).__name__)
-            if not cancelled.is_set():
-                if isinstance(exc, (GuidedCommandError, ProductAPIError)):
-                    await send('error', 'Product information is unavailable.' if isinstance(exc, ProductAPIError) else 'Command is invalid for the current stage or already processed.', {'code': 'product_data_unavailable' if isinstance(exc, ProductAPIError) else 'invalid_stage', 'invalidate_product_facts': True})
+                if _cancel_flags.get(session_id):
+                    await send('cancelled', '', {'turn_id': turn_id, 'provider_cancelled': False, 'output_suppressed': True})
                     return
-                await send('error', 'Session is busy.' if isinstance(exc, SessionBusyError) else 'Database persistence unavailable. Outage fail-safe active.' if isinstance(exc, DatabaseConnectionError) else 'Unable to process your message. Please try again.')
+
+                if event_type == "llm_first_token":
+                    llm_first_token_ms = data
+                elif event_type == "token":
+                    await send('token', data)
+                elif event_type == "sentence":
+                    if any(k in data for k in ('"reply"', '"action"', '"skus"', '{', '}')):
+                        logger.warning("[Chat] dropped non-speech text: %s", data)
+                        continue
+                    if instant_opener and data.strip().lower() == instant_opener.strip().lower():
+                        continue
+                    accumulated_reply += data + " "
+                    if is_v2:
+                        await send('sentence', data)
+                        if first_sentence_sent_ms is None:
+                            first_sentence_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
+                    if first_frame_sent_ms is None:
+                        first_frame_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
+                elif event_type == "action":
+                    if not instant_action and is_v2 and data:
+                        final_action = data
+                        _sync_screen_from_action(ctx, final_action)
+                        await send('action', data, {'turn_id': turn_id})
+                        if first_frame_sent_ms is None:
+                            first_frame_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
+                elif event_type == "llm_done":
+                    llm_done_ms = data
+                elif event_type == "done":
+                    parsed_res = data
+                    if not instant_action and parsed_res.get("action"):
+                        final_action = parsed_res["action"]
+                        _sync_screen_from_action(ctx, final_action)
+                    final_stage = parsed_res.get("sales_stage") or final_stage
+
+            if not accumulated_reply.strip():
+                accumulated_reply = instant_opener or "I'd be glad to help you explore our sustainable collection. What are you looking for today?"
+
+            if any(k in accumulated_reply for k in ('"reply"', '"action"', '"skus"', '{', '}')):
+                logger.warning("[Chat] dropped non-speech text: %s", accumulated_reply)
+                accumulated_reply = instant_opener or "Here are some wonderful choices for you."
+
+            # Update context memory
+            if ctx:
+                ctx.turn_count += 1
+                ctx.history.append({"role": "user", "content": message})
+                ctx.history.append({"role": "assistant", "content": accumulated_reply.strip()})
+                ctx.history = ctx.history[-12:]
+                if final_action:
+                    _sync_screen_from_action(ctx, final_action)
+
+            # Determine decision source for logging
+            if instant_action:
+                dec_source = "instant"
+                dec_act = instant_action.get("action")
+                dec_skus = instant_skus or ([instant_action.get("sku")] if instant_action.get("sku") else [])
+            elif final_action and final_action.get("action") and final_action.get("action") != "NONE":
+                dec_source = "llm"
+                dec_act = final_action.get("action")
+                dec_skus = [final_action.get("sku")] if final_action.get("sku") else [p.get("sku") for p in final_action.get("products", []) if isinstance(p, dict)]
+            else:
+                dec_source = "fallback" if not final_action else "llm"
+                dec_act = final_action.get("action") if final_action else "NONE"
+                dec_skus = []
+
+            dec_log = f"[Decision] source={dec_source} action={dec_act} skus={dec_skus}"
+            logger.info(dec_log)
+            print(dec_log, flush=True)
+
+            # 3. Send done frame with full reply and turn metadata
+            await send('done', accumulated_reply.strip(), {
+                'session_id': session_id,
+                'turn_id': turn_id,
+                'sales_stage': final_stage,
+                'action': final_action,
+            } if is_v2 else None)
+
+            # Per-turn timing log
+            first_f_ms = first_frame_sent_ms if first_frame_sent_ms is not None else int((time.perf_counter() - t_ws_recv) * 1000)
+            first_s_ms = first_sentence_sent_ms if first_sentence_sent_ms is not None else int((time.perf_counter() - t_ws_recv) * 1000)
+            llm_ft_ms = llm_first_token_ms if llm_first_token_ms is not None else 0
+            llm_d_ms = llm_done_ms if llm_done_ms is not None else int((time.perf_counter() - t_llm_start) * 1000)
+
+            log_line = (
+                f"[Latency] turn={turn_id} "
+                f"stt_final->ws_sent={stt_final_to_ws_sent}ms "
+                f"ws_received->llm_start={llm_start_ms}ms "
+                f"llm_first_token={llm_ft_ms}ms "
+                f"llm_done={llm_d_ms}ms "
+                f"first_frame_sent={first_f_ms}ms "
+                f"first_sentence_sent={first_s_ms}ms"
+            )
+            logger.info(log_line)
+            print(log_line, flush=True)
+            return
+
+        except Exception as exc:
+            logger.error('Conversation turn error: %s', exc, exc_info=True)
+            if not cancelled.is_set() and not disconnected.is_set():
+                fallback_reply = "I'd be glad to help you explore our sustainable collection. What are you looking for today?"
+                await send('token', fallback_reply)
+                await send('done', fallback_reply, {'session_id': session_id, 'turn_id': turn_id})
 
     try:
         while True:
@@ -886,6 +1087,49 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 cancelled.set()
                 await send('cancelled', '', {'turn_id': current_id, 'provider_cancelled': False, 'output_suppressed': True})
                 continue
+
+            ev_type = payload.get('event') or payload.get('type')
+            if ev_type in ('name_submitted', 'name_skipped', 'screen_changed'):
+                from app.fast_flow import get_ff
+                ctx = get_ff(session_id)
+                data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+                if ev_type == 'name_submitted':
+                    submitted_name = (data.get('name') or payload.get('name') or '').strip()
+                    if submitted_name and ctx:
+                        ctx.name = submitted_name
+                        ctx.name_status = 'given'
+                        logger.info("[Session] name_submitted session=%s name=%s", session_id, ctx.name)
+                        print(f"[Session] name_submitted session={session_id} name={ctx.name}", flush=True)
+                elif ev_type == 'name_skipped':
+                    if ctx:
+                        ctx.name_status = 'skipped'
+                        logger.info("[Session] name_skipped session=%s", session_id)
+                        print(f"[Session] name_skipped session={session_id}", flush=True)
+                elif ev_type == 'screen_changed':
+                    if ctx:
+                        stype = data.get('type') or data.get('screen_type') or payload.get('screen_type')
+                        scat = data.get('category') or payload.get('category')
+                        ssku = data.get('sku') or payload.get('sku')
+                        sskus = data.get('skus') or payload.get('skus') or []
+                        ctx.current_screen = {
+                            'type': stype,
+                            'category': scat,
+                            'sku': ssku,
+                        }
+                        if sskus:
+                            ctx.last_list_skus = list(sskus)
+                        elif ssku and (not ctx.last_list_skus or ctx.current_screen.get('type') == 'product'):
+                            if ssku not in ctx.last_list_skus:
+                                ctx.last_list_skus = [ssku]
+                        if ssku:
+                            ctx.selected_sku = ssku
+                        elif stype in ('home', 'categories'):
+                            ctx.selected_sku = None
+                        if stype == 'categories':
+                            ctx.categories_shown_at = time.time()
+                        logger.info("[Session] screen_changed session=%s screen=%s selected_sku=%s skus=%s", session_id, ctx.current_screen, ctx.selected_sku, ctx.last_list_skus)
+                        print(f"[Session] screen_changed session={session_id} screen={ctx.current_screen} selected_sku={ctx.selected_sku} skus={ctx.last_list_skus}", flush=True)
+                continue
             try:
                 body = ChatRequest.model_validate({
                     **{key: value for key, value in payload.items() if key != 'v'},
@@ -915,7 +1159,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             current_id = turn_id
             cancelled.clear()
             _cancel_flags[session_id] = False
-            running = asyncio.create_task(execute(message.strip(), turn_id, body.command()))
+            running = asyncio.create_task(execute(message.strip(), turn_id, body.command(), payload))
     except WebSocketDisconnect:
         pass
     finally:

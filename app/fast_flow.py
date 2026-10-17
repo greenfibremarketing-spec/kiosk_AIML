@@ -18,6 +18,7 @@ All transitions are pure-Python. No LLM call for button actions (<100 ms).
 from __future__ import annotations
 import logging
 import re
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -63,6 +64,15 @@ def _load_catalog() -> Dict[str, Any]:
     return get_verified_catalog()
 
 
+def _ensure_products(ctx: FastFlowContext) -> None:
+    if not ctx.products:
+        try:
+            catalog = _load_catalog()
+            ctx.products = _active_products(catalog)
+        except Exception as exc:
+            logger.warning("[FastFlow] Could not load products: %s", exc)
+
+
 def _categories(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen: Dict[str, int] = {}
     for p in products:
@@ -75,20 +85,57 @@ def _categories(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
-def _extract_name(text: str) -> Optional[str]:
+STOP_NAME_WORDS = {
+    "only", "just", "show", "me", "the", "yes", "no", "okay", "ok",
+    "bottle", "bottles", "mug", "mugs", "price", "cost", "plate", "plates",
+    "bowl", "bowls", "casserole", "canister", "canisters", "gift", "gifting",
+    "hamper", "planter", "planters", "dining", "products", "product", "items",
+    "item", "all", "everything", "something", "anything", "please", "help",
+    "hi", "hello", "hey", "skip", "next", "pass", "what", "which", "where",
+    "how", "who", "why", "is", "are", "can", "will", "tell", "explore", "buy",
+    "cart", "checkout", "greenie", "greenfibre", "water", "cups", "set",
+    "collection", "sustainable", "eco", "good", "more", "cheaper", "glass",
+    "rice", "husk", "none"
+}
+
+
+def extract_customer_name(text: str, in_ask_name_step: bool = False) -> Optional[str]:
+    """Extract valid customer name adhering strictly to name capture rules.
+    Accepts only explicit prefixes or 1-2 words in the ASK_NAME step, rejecting stop words.
+    """
+    if not text:
+        return None
     t = text.strip()
-    for pat in [
-        r"(?:my name is|i am|i'm|call me|myself)\s+([A-Za-z]+)",
+
+    # Explicit intro patterns accepted anytime
+    prefixes = [
+        r"(?:my name is|i am|i'm|call me|this is|myself)\s+([A-Za-z]+)",
         r"(?:naam hai|mera naam)\s+([A-Za-z]+)",
-    ]:
+        r"(?:main\s+([A-Za-z]+)\s+hoon)",
+    ]
+    for pat in prefixes:
         m = re.search(pat, t, re.IGNORECASE)
         if m:
-            return m.group(1).title()
-    words = re.findall(r"[A-Za-z]+", t)
-    stop = {"hi", "hello", "hey", "greeny", "skip", "no", "what", "show", "bottle", "ok", "yes"}
-    if 1 <= len(words) <= 2 and words[0].lower() not in stop and len(words[0]) >= 2:
-        return words[0].title()
+            cand = m.group(1).title()
+            if len(cand) >= 2 and cand.lower() not in STOP_NAME_WORDS:
+                return cand
+
+    if in_ask_name_step:
+        # In ASK_NAME step: accept 1 or 2 word names (letters only)
+        words = re.findall(r"[A-Za-z]+", t)
+        clean_words = [w for w in words if w.lower() not in {"please", "thanks", "thank", "you"}]
+        if 1 <= len(clean_words) <= 2:
+            if any(w.lower() in STOP_NAME_WORDS for w in clean_words):
+                return None
+            first = clean_words[0]
+            if len(first) >= 2 and all(len(w) >= 2 for w in clean_words):
+                return " ".join(w.title() for w in clean_words)
+
     return None
+
+
+def _extract_name(text: str) -> Optional[str]:
+    return extract_customer_name(text, in_ask_name_step=False)
 
 
 # ---------------------------------------------------------------------------
@@ -142,20 +189,39 @@ def _always_available() -> List[Dict[str, str]]:
 
 class FastFlowContext:
     __slots__ = (
-        "stage", "name", "speech_id",
+        "stage", "name", "name_status", "name_asked_count",
+        "categories_shown_at", "current_screen", "last_list_skus",
+        "speech_id",
         "products", "cat_products", "product_index",
         "selected_sku", "silence_strikes",
+        "pending_resume", "turn_count", "last_resume_turn",
+        "history",
+        "tapped_item_hint_spoken",
+        "last_list_announcement_time",
+        "last_list_announcement_category",
     )
 
     def __init__(self) -> None:
         self.stage: str = "WAKE"
         self.name: Optional[str] = None
+        self.name_status: str = "unknown"  # "unknown" | "given" | "skipped"
+        self.name_asked_count: int = 0
+        self.categories_shown_at: float = 0.0
+        self.current_screen: Dict[str, Any] = {"type": "home", "category": None, "sku": None}
+        self.last_list_skus: List[str] = []
         self.speech_id: Optional[str] = None
         self.products: List[Dict[str, Any]] = []
         self.cat_products: List[Dict[str, Any]] = []
         self.product_index: int = 0
         self.selected_sku: Optional[str] = None
         self.silence_strikes: int = 0
+        self.pending_resume: Optional[str] = None
+        self.turn_count: int = 0
+        self.last_resume_turn: int = -99
+        self.history: List[Dict[str, str]] = []
+        self.tapped_item_hint_spoken: bool = False
+        self.last_list_announcement_time: float = 0.0
+        self.last_list_announcement_category: Optional[str] = None
 
     def reset(self) -> None:
         self.__init__()  # type: ignore[misc]
@@ -167,7 +233,9 @@ _ff: Dict[str, FastFlowContext] = {}
 def get_ff(session_id: str) -> FastFlowContext:
     if session_id not in _ff:
         _ff[session_id] = FastFlowContext()
-    return _ff[session_id]
+    ctx = _ff[session_id]
+    _ensure_products(ctx)
+    return ctx
 
 
 def drop_ff(session_id: str) -> None:
@@ -183,6 +251,12 @@ def silence_tick(session_id: str) -> Dict[str, Any]:
     ctx = get_ff(session_id)
     ctx.silence_strikes += 1
     if ctx.silence_strikes == 1:
+        # If pending_resume is present and spaced at least 3 turns, speak it
+        if ctx.pending_resume and (ctx.turn_count - ctx.last_resume_turn) >= 3:
+            line = ctx.pending_resume
+            ctx.pending_resume = None
+            ctx.last_resume_turn = ctx.turn_count
+            return {"type": "ping_silence", "data": line}
         return {"type": "ping_silence", "data": "Still there? Say something or tap a button."}
     ctx.reset()
     return {"type": "auto_reset", "data": "Resetting for the next person..."}
@@ -201,6 +275,7 @@ def fast_transition(
     """Return (reply, screen_action, state). Raises ProductAPIError on failure."""
     ctx = get_ff(session_id)
     ctx.silence_strikes = 0
+    ctx.turn_count += 1
     msg = raw_message.strip()
     ml = msg.lower()
 
@@ -230,15 +305,33 @@ def fast_transition(
     if command:
         cmd_action = command.get("action")
         if cmd_action == "SET_NAME":
-            name_val = command.get("name") or _extract_name(msg) or msg
-            return _step_collect_name(ctx, session_id, name_val)
+            name_val = command.get("name") or extract_customer_name(msg, in_ask_name_step=True) or msg
+            ctx.name = str(name_val).strip()
+            ctx.name_status = "given"
+            ctx.name_asked_count = max(ctx.name_asked_count, 1)
+            return _step_collect_name(ctx, session_id, ctx.name)
         if cmd_action == "SKIP_NAME":
+            if ctx.name_status != "given":
+                ctx.name = None
+                ctx.name_status = "skipped"
+            ctx.name_asked_count = max(ctx.name_asked_count, 1)
             return _step_collect_name(ctx, session_id, "skip")
         if cmd_action == "SELECT_CATEGORY":
             target = command.get("category_id") or command.get("category_name") or msg
             return _step_select_category(ctx, session_id, f"select_category:{target}", f"select_category:{target}".lower())
         if cmd_action == "SHOW_ALL":
             return _step_select_category(ctx, session_id, "show all", "show all")
+        if cmd_action == "SELECT_PRODUCT":
+            target = command.get("sku") or command.get("product_name") or msg
+            _ensure_products(ctx)
+            matched = _find_in_products(ctx.products, target)
+            if matched:
+                ctx.cat_products = [matched]
+                ctx.product_index = 0
+                ctx.stage = "PRODUCT"
+                ctx.selected_sku = matched.get("sku")
+                return _show_specific_product(ctx, matched)
+            return _step_product_action(ctx, session_id, f"select_product:{target}", f"select_product:{target}".lower())
         if cmd_action == "NAVIGATE_BACK":
             ctx.stage = "CATEGORY"
             ctx.selected_sku = None
@@ -307,6 +400,7 @@ def _step_wake(ctx: FastFlowContext, session_id: str) -> Tuple[str, Dict[str, An
     ctx.reset()
     ctx.stage = "GREETING"
     ctx.speech_id = uuid.uuid4().hex
+    ctx.current_screen = {"type": "home", "category": None, "sku": None}
     reply = "Hi! I'm Greeny, your shopping guide at Green Fibre. I'm here to help you discover our eco-friendly products, made from rice husk."
     return reply, {
         "action": "SHOW_GREETING",
@@ -320,19 +414,30 @@ def _step_wake(ctx: FastFlowContext, session_id: str) -> Tuple[str, Dict[str, An
 
 
 def _step_ask_name(ctx: FastFlowContext, session_id: str) -> Tuple[str, Dict[str, Any], None]:
+    if ctx.name_status in ("given", "skipped") or ctx.name_asked_count >= 1:
+        return _step_collect_name(ctx, session_id, "skip")
+    ctx.name_asked_count += 1
     ctx.stage = "NAME"
+    ctx.current_screen = {"type": "home", "category": None, "sku": None}
     reply = "Before we start, may I know your name?"
     return reply, _wrap(ctx, "ASK_NAME", {"prompt": reply, "message": reply, "skip_allowed": True},
                         buttons=_name_buttons(), input_enabled=True), None
 
 
 def _step_collect_name(ctx: FastFlowContext, session_id: str, msg: str) -> Tuple[str, Dict[str, Any], None]:
-    lower = msg.lower()
-    skip_words = {"skip", "skip name", "next", "no", "nahi", "chodo", "aage", "don't want", "dont want"}
-    if any(s in lower for s in skip_words):
-        ctx.name = None
+    lower = msg.lower().strip()
+    skip_words = {"skip", "skip name", "no name", "just browse", "next", "no", "nahi", "chodo", "aage", "don't want", "dont want"}
+    if any(s in lower for s in skip_words) or lower in ("skip", "skip name", "no name", "just browse"):
+        if ctx.name_status != "given":
+            ctx.name = None
+            ctx.name_status = "skipped"
     else:
-        ctx.name = _extract_name(msg) or (msg.title() if len(msg.split()) <= 2 and all(w.isalpha() for w in msg.split()) else None)
+        extracted = extract_customer_name(msg, in_ask_name_step=True)
+        if extracted:
+            ctx.name = extracted
+            ctx.name_status = "given"
+        elif ctx.name_status != "given":
+            pass
 
     try:
         catalog = _load_catalog()
@@ -342,6 +447,8 @@ def _step_collect_name(ctx: FastFlowContext, session_id: str, msg: str) -> Tuple
 
     cats = _categories(ctx.products)
     ctx.stage = "CATEGORY"
+    ctx.current_screen = {"type": "categories", "category": None, "sku": None}
+    ctx.categories_shown_at = time.time()
     if ctx.name:
         reply = f"Nice to meet you, {ctx.name}! Have a look at our collection. Tap a category, or ask me anything."
     else:
@@ -369,19 +476,18 @@ def _find_in_products(products: List[Dict[str, Any]], target: str) -> Optional[D
 
 def _show_specific_product(ctx: FastFlowContext, prod: Dict[str, Any]) -> Tuple[str, Dict[str, Any], None]:
     view = product_view(prod)
-    p_name = view.get("name", "this product")
-    price = _price_str(view) or "price on request"
-    desc = (prod.get("description") or prod.get("shortDescription") or "")[:120].rstrip()
     sku = view.get("sku") or prod.get("sku") or ""
-    pitch = f" {desc}." if desc else ""
-    great_choice = f"Great choice, {ctx.name}! " if ctx.name else "Great choice! "
-    reply = f"{great_choice}Here is our {p_name} for {price}.{pitch} Would you like to see its colours, price or other details?"
+    merged_prod = {**prod, **view}
+    from app.product_speech import build_product_speech
+    chunks, reply = build_product_speech(merged_prod, customer_name=ctx.name)
+    desc = (prod.get("description") or prod.get("shortDescription") or "")[:120].rstrip()
     ctx.stage = "PRODUCT"
     ctx.selected_sku = sku
+    ctx.current_screen = {"type": "product", "category": prod.get("category"), "sku": sku}
     return (
         reply,
         _wrap(ctx, "SHOW_PRODUCT",
-              {"product": _card({**prod, **view}), "description": desc, "sku": sku},
+              {"product": _card(merged_prod), "description": desc, "sku": sku, "message": reply, "chunks": chunks},
               buttons=_product_buttons(sku)),
         None,
     )
@@ -390,6 +496,7 @@ def _show_specific_product(ctx: FastFlowContext, prod: Dict[str, Any]) -> Tuple[
 def _step_select_category(
     ctx: FastFlowContext, session_id: str, msg: str, ml: str,
 ) -> Tuple[str, Dict[str, Any], None]:
+    _ensure_products(ctx)
     if ml.startswith("select_product:"):
         target = msg.split(":", 1)[1].strip()
         matched = _find_in_products(ctx.products, target)
@@ -436,25 +543,52 @@ def _step_select_category(
         )
 
     count = len(ctx.cat_products)
-    names = [p.get("name") for p in ctx.cat_products if p.get("name")]
+
+    def _natural_cat_phrase(label: str) -> str:
+        cl = (label or "").lower()
+        if any(k in cl for k in ["bottle", "tumbler"]):
+            return "Here are our bottles."
+        if any(k in cl for k in ["gift", "hamper"]):
+            return "Here are our gifting picks."
+        if any(k in cl for k in ["drinkware", "mug", "cup"]):
+            return "Here are our drinkware picks."
+        if any(k in cl for k in ["kitchen", "dining", "casserole", "bowl"]):
+            return "Here are our kitchen and dining essentials."
+        if "planter" in cl:
+            return "Here are our planters."
+        if any(k in cl for k in ["tableware", "plate"]):
+            return "Here are our tableware pieces."
+        if any(k in cl for k in ["storage", "canister"]):
+            return "Here are our storage canisters."
+        if any(k in cl for k in ["office", "stationery", "desk"]):
+            return "Here are our desk essentials."
+        return "Here are all our products."
+
+    now = time.time()
+    is_recent_duplicate = (
+        (now - getattr(ctx, "last_list_announcement_time", 0.0) < 30.0)
+        and (getattr(ctx, "last_list_announcement_category", None) == cat_label)
+    )
+
     if count == 0:
         reply = f"I couldn't find any products in {cat_label} right now. Want to see everything?"
-    elif count == 1:
-        reply = f"In {cat_label}, we have {names[0]}. Would you like to check it out?"
-    elif count == 2:
-        reply = f"In {cat_label}, we have 2 products: {names[0]} and {names[1]}. Which one would you like to see?"
-    elif count <= 4:
-        names_str = ", ".join(names[:-1]) + " and " + names[-1]
-        reply = f"In {cat_label}, we have {count} products: {names_str}. Which one would you like to explore?"
+    elif is_recent_duplicate:
+        reply = "Here you go!"
     else:
-        names_str = ", ".join(names[:3])
-        reply = f"In {cat_label}, we have {count} products including {names_str}. Which one would you like to explore?"
-
-    if ctx.name:
-        reply = f"{ctx.name}, {reply[0].lower() + reply[1:]}"
+        ctx.last_list_announcement_time = now
+        ctx.last_list_announcement_category = cat_label
+        base_line = _natural_cat_phrase(cat_label)
+        if not getattr(ctx, "tapped_item_hint_spoken", False):
+            ctx.tapped_item_hint_spoken = True
+            reply = f"{base_line} Tap any item on the screen to view details or tell me what you'd like to see."
+        else:
+            reply = base_line
 
     ctx.product_index = 0
     ctx.stage = "CATEGORY"
+    ctx.selected_sku = None
+    ctx.current_screen = {"type": "list", "category": cat_label, "sku": None}
+    ctx.last_list_skus = [p.get("sku") for p in ctx.cat_products if p.get("sku")]
     return (
         reply,
         _wrap(ctx, "SHOW_PRODUCTS", {
@@ -530,7 +664,7 @@ def _step_product_action(
     buy_phrases = ("buy", "i'll take it", "ill take it", "add to cart", "purchase", "buy it", "le lo")
     if ml.startswith("buy:") or ml in buy_phrases:
         sku = msg.split(":", 1)[1].strip() if ml.startswith("buy:") else (
-            ctx.cat_products[ctx.product_index].get("sku") if ctx.cat_products else None
+            ctx.selected_sku or (ctx.cat_products[ctx.product_index].get("sku") if ctx.cat_products else None)
         )
         ctx.selected_sku = sku
         ctx.stage = "BUY"
@@ -584,6 +718,7 @@ def _show_current_product(ctx: FastFlowContext) -> Tuple[str, Dict[str, Any], No
 
 
 def _step_confirm_buy(ctx: FastFlowContext, sku: Optional[str]) -> Tuple[str, Dict[str, Any], None]:
+    ctx.current_screen = {"type": "cart", "category": None, "sku": sku}
     name_part = (", " + ctx.name) if ctx.name else ""
     reply = "Add it to your cart" + name_part + "? Tap 'Go to checkout' or keep shopping."
     return reply, _wrap(ctx, "CONFIRM_BUY", {"sku": sku}, buttons=_buy_buttons(ctx.name)), None
