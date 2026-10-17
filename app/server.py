@@ -287,6 +287,9 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
+from app.payments import router as payments_router
+api.include_router(payments_router)
+
 
 @api.middleware('http')
 async def request_metadata(request, call_next):
@@ -867,6 +870,7 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             from app.sales_engine import get_verified_catalog
             from app.conversation_agent import (
                 build_compact_catalog,
+                match_small_talk_intent,
                 quick_match_intent,
                 stream_free_conversation,
             )
@@ -920,13 +924,64 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                     await send('action', instant_action, {'turn_id': turn_id})
                     first_frame_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
 
+                # For SHOW_PRODUCT: ensure navigation happens first and the client's unified product-open
+                # handler speaks from the verified product object shown on screen (no separate LLM speech conflict)
+                if instant_action and instant_action.get("action") == "SHOW_PRODUCT":
+                    reply = instant_opener or "Here it is!"
+                    for word in reply.split():
+                        await send('token', word + ' ')
+                    if is_v2:
+                        await send('sentence', reply)
+                    await send('done', reply, {
+                        'session_id': session_id,
+                        'turn_id': turn_id,
+                        'sales_stage': 'SHOW_PRODUCT',
+                        'action': instant_action,
+                    } if is_v2 else None)
+                    if ctx:
+                        ctx.turn_count += 1
+                        ctx.history.append({"role": "user", "content": message})
+                        ctx.history.append({"role": "assistant", "content": reply})
+                        ctx.history = ctx.history[-12:]
+                        _sync_screen_from_action(ctx, instant_action)
+                    return
+
                 if instant_opener:
                     await send('token', instant_opener + ' ')
                     if is_v2:
                         await send('sentence', instant_opener)
                         first_sentence_sent_ms = int((time.perf_counter() - t_ws_recv) * 1000)
 
-            # Step 2: Real LLM streaming for friendly explanation
+            # Step 1b: Small talk / out-of-context intent check (no AI call needed)
+            st_match = match_small_talk_intent(
+                customer_message=message,
+                customer_name=ctx.name if ctx else None,
+                all_products=all_products,
+            )
+            if st_match:
+                st_reply = st_match.get("reply", "")
+                st_intent = st_match.get("intent", "small_talk")
+                dec_log = f"[Decision] source=small_talk intent={st_intent} action=NONE skus=[] reply='{st_reply}'"
+                logger.info(dec_log)
+                print(dec_log, flush=True)
+                for word in st_reply.split():
+                    await send('token', word + ' ')
+                if is_v2:
+                    await send('sentence', st_reply)
+                await send('done', st_reply, {
+                    'session_id': session_id,
+                    'turn_id': turn_id,
+                    'sales_stage': 'BROWSING',
+                    'action': None,
+                } if is_v2 else None)
+                if ctx:
+                    ctx.turn_count += 1
+                    ctx.history.append({"role": "user", "content": message})
+                    ctx.history.append({"role": "assistant", "content": st_reply})
+                    ctx.history = ctx.history[-12:]
+                return
+
+            # Step 2: Real LLM streaming for free-form questions
             t_llm_start = time.perf_counter()
             llm_start_ms = int((t_llm_start - t_ws_recv) * 1000)
 

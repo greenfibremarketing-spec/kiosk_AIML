@@ -55,8 +55,30 @@ def normalize_for_speech(text: str) -> str:
     if not text:
         return ""
     t = str(text)
-    t = re.sub(r"₹\s*([\d,]+(?:\.\d+)?)(?:\s*rupees)?(?!\w)", r"\1 rupees ", t, flags=re.IGNORECASE)
-    t = re.sub(r"(?:rs\.?|inr)\s*([\d,]+(?:\.\d+)?)(?:\s*rupees)?(?!\w)", r"\1 rupees ", t, flags=re.IGNORECASE)
+
+    def _repl_rupees(m):
+        raw = m.group(1).replace(",", "")
+        try:
+            n = round(float(raw))
+            return f"{n:,} rupees " if n > 0 else ""
+        except Exception:
+            return m.group(0)
+
+    t = re.sub(r"₹\s*([\d,]+(?:\.\d+)?)(?:\s*rupees)?(?!\w)", _repl_rupees, t, flags=re.IGNORECASE)
+    t = re.sub(r"(?:rs\.?|inr)\s*([\d,]+(?:\.\d+)?)(?:\s*rupees)?(?!\w)", _repl_rupees, t, flags=re.IGNORECASE)
+
+    def _repl_num_rupees(m):
+        raw = m.group(1).replace(",", "")
+        try:
+            n = round(float(raw))
+            return f"{n:,} rupees"
+        except Exception:
+            return m.group(0)
+
+    t = re.sub(r"\b(\d{3,5})\s*rupees\b", _repl_num_rupees, t, flags=re.IGNORECASE)
+    # Standalone price numbers matching catalog values
+    t = re.sub(r"\b(799|899|999|1199|1299|1499|1599|1699|3199|6999|7999)\b(?!\s*(?:millilitres|ml|percent|%|cm|mm|inches|gm|g|kg))", _repl_num_rupees, t, flags=re.IGNORECASE)
+
     t = re.sub(r"(\d+)\s*%", r"\1 percent", t)
     t = re.sub(r"\s*&\s*", " and ", t)
     t = re.sub(r"\s+[–—\-]\s+", ", ", t)
@@ -75,6 +97,7 @@ def chunk_text(text: str) -> List[str]:
     if not normalized:
         return []
 
+    # Split ONLY at sentence ends (. ! ?) - never at commas
     raw_sentences = [
         s.strip() for s in re.split(r"(?<=[.?!])\s+(?=[A-Z0-9\"'])", normalized) if s.strip()
     ]
@@ -103,20 +126,14 @@ def chunk_text(text: str) -> List[str]:
             final_chunks.append(c)
             continue
 
+        # Split long sentences ONLY at word spaces, NEVER at commas
         remaining = c
         while len(remaining) > 80:
-            split_idx = -1
-            comma_matches = list(re.finditer(r"(?<!\d),(?!\d)\s+", remaining[:80]))
-            if comma_matches:
-                last_comma = comma_matches[-1]
-                if last_comma.start() >= 20:
-                    split_idx = last_comma.start() + 1
-            if split_idx == -1:
-                space_idx = remaining[:80].rfind(" ")
-                if space_idx >= 20:
-                    split_idx = space_idx
-                else:
-                    split_idx = 80
+            space_idx = remaining[:80].rfind(" ")
+            if space_idx >= 20:
+                split_idx = space_idx
+            else:
+                split_idx = 80
 
             part = remaining[:split_idx].strip()
             if part:

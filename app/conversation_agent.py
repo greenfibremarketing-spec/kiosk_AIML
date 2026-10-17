@@ -253,33 +253,52 @@ def normalize_query_text(text: str) -> str:
 
 
 def score_product_match(query_norm: str, p: Dict[str, Any], raw_query: str = "") -> float:
-    """Fuzzy scoring function comparing normalized query against a product."""
+    """Best-match rule: exact name -> all words matching -> fuzzy with strict spec conflict filters."""
     name = (p.get("name") or "").lower()
     sku = (p.get("sku") or "").lower()
     name_norm = normalize_query_text(name)
     raw_lower = raw_query.lower()
 
     if sku and (sku in query_norm or sku in raw_lower):
-        return 1.0
+        return 2.0
 
-    score = 0.0
+    # 1. Exact Name Matching Rule
+    if query_norm == name_norm:
+        return 2.0
+    if name_norm and name_norm in query_norm:
+        return 1.8
 
-    # Specific capacity/size specs: e.g. 900 ml, 400 ml
+    # 2. Strict Spec Conflict Filters (e.g. 400 ml vs 900 ml, Set of 2 vs Set of 4)
+    # Capacity filter (400 vs 900)
     has_900_q = bool(re.search(r"\b900\b", query_norm) or re.search(r"\b900\s*ml\b", raw_lower))
     has_900_p = "900" in name_norm or "900" in sku
-    if has_900_q:
-        if has_900_p:
-            score += 0.80
-        else:
-            return 0.0
-
     has_400_q = bool(re.search(r"\b400\b", query_norm) or re.search(r"\b400\s*ml\b", raw_lower))
     has_400_p = "400" in name_norm or "400" in sku
-    if has_400_q:
-        if has_400_p:
-            score += 0.80
-        else:
-            return 0.0
+    if has_900_q and not has_900_p:
+        return 0.0
+    if has_400_q and not has_400_p:
+        return 0.0
+
+    # Set / Pair quantity filter (2 vs 4)
+    has_2_q = bool(re.search(r"\b(2|two|pair of 2|set of 2)\b", raw_lower) or re.search(r"\b(2|set of 2|pair of 2)\b", query_norm))
+    has_4_q = bool(re.search(r"\b(4|four|set of 4)\b", raw_lower) or re.search(r"\b(4|set of 4)\b", query_norm))
+    has_2_p = "set of 2" in name_norm or "pair of 2" in name_norm or bool(re.search(r"\b2\b", name_norm))
+    has_4_p = "set of 4" in name_norm or bool(re.search(r"\b4\b", name_norm))
+
+    if has_2_q and has_4_p and not has_2_p:
+        return 0.0
+    if has_4_q and has_2_p and not has_4_p:
+        return 0.0
+
+    score = 0.0
+    if has_900_q and has_900_p:
+        score += 0.80
+    if has_400_q and has_400_p:
+        score += 0.80
+    if has_2_q and has_2_p:
+        score += 0.60
+    if has_4_q and has_4_p:
+        score += 0.60
 
     # Distinctive product keywords
     distinctive_keywords = [
@@ -302,13 +321,15 @@ def score_product_match(query_norm: str, p: Dict[str, Any], raw_query: str = "")
             if any(s in name_norm for s in syns):
                 score += 0.50
 
-    # Token overlap with product name
+    # All substantive words matching rule
     q_tokens = set(query_norm.split())
     name_tokens = set(name_norm.split())
-    generic = {"the", "a", "an", "for", "in", "of", "and", "set", "pack", "pair", "our", "item", "product"}
+    generic = {"the", "a", "an", "for", "in", "of", "and", "our", "item", "product"}
     q_clean = q_tokens - generic
     n_clean = name_tokens - generic
-    if q_clean and n_clean:
+    if n_clean and n_clean.issubset(q_clean):
+        score += 0.60
+    elif q_clean and n_clean:
         overlap = len(q_clean.intersection(n_clean))
         score += (overlap / max(len(n_clean), 1)) * 0.40
 
@@ -1242,7 +1263,8 @@ def _build_fallback_response(
         act = "NONE"
         skus_list = []
         cat = screen_info.get("category")
-        cat_str = f"our {cat}" if cat and cat != "all" else "our collection"
+        clean_cat = (cat or "").replace("our ", "").strip()
+        cat_str = f"our {clean_cat}" if clean_cat and clean_cat != "all" else "our collection"
         reply_text = f"Here are the items in {cat_str}. Tap any item on the screen to view details, or ask me anything."
 
     elif screen_type == "categories":
@@ -1640,3 +1662,108 @@ def handle_free_conversation(
     _CONV_CACHE[cache_key] = (now, res)
 
     return res
+
+
+# ── Small Talk & Out-Of-Context Intent Handler ──────────────────────────────
+
+_SMALL_TALK_ROTATION = 0
+
+def match_small_talk_intent(
+    customer_message: str,
+    customer_name: Optional[str] = None,
+    all_products: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Determine if customer message is friendly small talk or out-of-context.
+    Used ONLY when speech is NOT a product, category, cart, or navigation command.
+    Returns dict with {intent, reply} if matched, else None.
+    """
+    global _SMALL_TALK_ROTATION
+    raw = (customer_message or "").strip()
+    msg_l = raw.lower()
+    norm = re.sub(r"[^\w\s]", " ", msg_l).strip()
+    norm = re.sub(r"\s+", " ", norm)
+
+    # User's name injection (at most once per reply)
+    name_clause = f", {customer_name}" if customer_name else ""
+
+    # Rotation index (0, 1, 2)
+    variant_idx = _SMALL_TALK_ROTATION % 3
+    _SMALL_TALK_ROTATION += 1
+
+    # Intent 7: Speech not understood (empty, very short, noise, filler)
+    if not norm or len(norm) <= 2 or re.match(r"^(?:uh|um|ah|hmm|mhm|er|eh|noise|speech|test)$", norm):
+        replies = [
+            "Sorry, I couldn't catch that, it may be some noise around. Please say it again, or use the touch screen.",
+            "I didn't quite get that through the background sound. Please try saying it again, or tap on the screen.",
+            "Pardon me, I couldn't hear that clearly. Could you please repeat, or explore using the touch screen.",
+        ]
+        return {"intent": "not_understood", "reply": replies[variant_idx]}
+
+    # Intent 1: Greetings and "how are you"
+    if re.search(r"\b(how are you|how r u|how are things|how do you do|how's it going|how are you doing|how is your day|good morning|good afternoon|good evening|hello greeny|hi greeny)\b", norm) or norm in ("hello", "hi", "hey"):
+        replies = [
+            f"I'm doing great, thank you for asking{name_clause}! How can I help you today?",
+            f"I'm having a wonderful day{name_clause}, thank you! What can I help you find today?",
+            f"Doing very well, thank you{name_clause}! What would you like to explore today?",
+        ]
+        return {"intent": "greeting", "reply": replies[variant_idx]}
+
+    # Intent 2: Thanks
+    if re.search(r"\b(thank you|thanks|thank u|thanks a lot|thank you so much|thx|dhanyawad|shukriya)\b", norm):
+        replies = [
+            f"You're most welcome{name_clause}! I'm right here if you need anything.",
+            f"Always happy to help{name_clause}! Let me know if you'd like to see more items.",
+            f"Anytime{name_clause}! Feel free to tap the screen or ask me about any product.",
+        ]
+        return {"intent": "thanks", "reply": replies[variant_idx]}
+
+    # Intent 3: Who are you / what can you do
+    if re.search(r"\b(who are you|what are you|what can you do|your name|what do you do|tell me about yourself|who is greeny)\b", norm):
+        replies = [
+            "I'm Greeny, your shopping guide. I can show you products, prices and colours, just ask me.",
+            "I'm Greeny, your store assistant. You can ask me about our sustainable collection, prices, or tap the screen to explore.",
+            "I'm Greeny! I help you find eco-friendly tableware, bottles and gifts. Tell me what you need, or tap any category.",
+        ]
+        return {"intent": "identity", "reply": replies[variant_idx]}
+
+    # Intent 4: Goodbye
+    if re.search(r"\b(goodbye|good bye|bye|see you|bye bye|see ya|alvida)\b", norm):
+        replies = [
+            f"Thank you for visiting Green Fibre{name_clause}! Have a lovely day.",
+            f"Goodbye{name_clause}! Thank you for stopping by Green Fibre. Have a wonderful day ahead.",
+            f"Take care{name_clause}! Thank you for exploring Green Fibre. See you soon.",
+        ]
+        return {"intent": "goodbye", "reply": replies[variant_idx]}
+
+    # Intent 6: Unrelated general question (weather, news, politics, cricket, jokes, etc.)
+    if re.search(r"\b(weather|temperature|forecast|rain|sunny|climate|news|politics|election|minister|president|cricket|score|match|ipl|joke|jokes|tell me a joke|capital of|time is it|what time|stock market|bitcoin)\b", norm):
+        replies = [
+            "I'm best at helping with our eco-friendly products. Please tell me what you're looking for, or tap on the screen to explore.",
+            "I'm here to help you shop our sustainable collection. Tell me what you'd like to see, or browse the screen.",
+            "I specialize in our Green Fibre products. Feel free to ask about our tableware, bottles, or tap the screen.",
+        ]
+        return {"intent": "general_out_of_context", "reply": replies[variant_idx]}
+
+    # Intent 5: Product or category name that does NOT exist in the catalogue
+    unlisted_item_words = (
+        "laptop", "computer", "notebook", "pc", "macbook",
+        "shoe", "shoes", "sneaker", "sneakers", "sandals", "slippers",
+        "phone", "mobile", "iphone", "smartphone", "android",
+        "tv", "television", "headphone", "headphones", "earbuds",
+        "clothes", "clothing", "shirt", "tshirt", "t-shirt", "pant", "jeans", "dress", "saree",
+        "watch", "smartwatch", "jewelry", "bag", "handbag", "purse",
+        "book", "books", "furniture", "sofa", "bed", "chair", "mattress",
+        "perfume", "cosmetics", "makeup", "toy", "toys", "groceries", "food", "pizza",
+    )
+    is_unlisted_query = any(re.search(r"\b" + re.escape(w) + r"\b", norm) for w in unlisted_item_words)
+    has_shopping_syntax = bool(re.search(r"\b(show me|looking for|want|need|have|where is|buy|search)\b", norm))
+
+    if is_unlisted_query or (has_shopping_syntax and not any(kw in norm for kw in ("bottle", "mug", "bowl", "casserole", "planter", "canister", "gift", "dining", "desk", "tissue", "storage", "green fibre", "rice husk"))):
+        replies = [
+            "I couldn't find that here, but you can browse our categories on the screen, or tap the item you like. You can try the touch navigation too.",
+            "We don't have that in our collection today, but you can check our categories on the screen or tap any item to explore.",
+            "That item isn't available with us, but you can explore our eco-friendly products on the screen or ask me about our bottles and tableware.",
+        ]
+        return {"intent": "unlisted_product", "reply": replies[variant_idx]}
+
+    return None
