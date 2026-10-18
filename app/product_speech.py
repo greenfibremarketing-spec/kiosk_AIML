@@ -75,7 +75,7 @@ def normalize_for_speech(text: str) -> str:
         except Exception:
             return m.group(0)
 
-    t = re.sub(r"\b(\d{3,5})\s*rupees\b", _repl_num_rupees, t, flags=re.IGNORECASE)
+    t = re.sub(r"(?<!\d)([\d,]+)\s*rupees\b", _repl_num_rupees, t, flags=re.IGNORECASE)
     # Standalone price numbers matching catalog values
     t = re.sub(r"\b(799|899|999|1199|1299|1499|1599|1699|3199|6999|7999)\b(?!\s*(?:millilitres|ml|percent|%|cm|mm|inches|gm|g|kg))", _repl_num_rupees, t, flags=re.IGNORECASE)
 

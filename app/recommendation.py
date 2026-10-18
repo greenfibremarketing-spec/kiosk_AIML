@@ -59,16 +59,21 @@ def _product_card(p: Dict[str, Any]) -> Dict[str, Any]:
     images = merged.get("images") or []
     image = (images[0] if images else None) or merged.get("image") or ""
     try:
-        raw_mrp = float(merged.get("mrp") or merged.get("price") or merged.get("salePrice") or 0)
+        raw_price = float(merged.get("price") or 0)
+        raw_mrp = float(merged.get("mrp") or 0)
+        if raw_price > 0 and raw_mrp > 0 and abs(raw_mrp / raw_price - 1.35) < 0.05:
+            base_mrp = raw_price
+        else:
+            base_mrp = raw_price or raw_mrp or float(merged.get("salePrice") or 0)
     except Exception:
-        raw_mrp = 0
-    sale_price = round(raw_mrp * 0.90) if raw_mrp > 0 else 0
+        base_mrp = 0
+    sale_price = round(base_mrp * 0.90) if base_mrp > 0 else 0
     return {
         "sku": merged.get("sku") or "",
         "id": merged.get("id") or merged.get("sku") or "",
         "name": merged.get("name") or "",
-        "price": raw_mrp,
-        "mrp": raw_mrp,
+        "price": base_mrp,
+        "mrp": base_mrp,
         "salePrice": sale_price,
         "image": image,
         "images": images,
@@ -403,11 +408,16 @@ def get_pairup_recommendations(
     results = []
     for p in picked:
         try:
-            raw_mrp = float(p.get("mrp") or p.get("price") or p.get("salePrice") or 0)
+            raw_price = float(p.get("price") or 0)
+            raw_mrp = float(p.get("mrp") or 0)
+            if raw_price > 0 and raw_mrp > 0 and abs(raw_mrp / raw_price - 1.35) < 0.05:
+                base_mrp = raw_price
+            else:
+                base_mrp = raw_price or raw_mrp or float(p.get("salePrice") or 0)
         except Exception:
-            raw_mrp = 0.0
+            base_mrp = 0.0
 
-        sale_price = round(raw_mrp * 0.90) if raw_mrp > 0 else 0.0
+        sale_price = round(base_mrp * 0.90) if base_mrp > 0 else 0.0
 
         images = p.get("images") or []
         image = (images[0] if images else None) or p.get("image") or ""
@@ -416,8 +426,8 @@ def get_pairup_recommendations(
             "id": str(p.get("id") or p.get("sku") or ""),
             "sku": str(p.get("sku") or p.get("id") or ""),
             "name": str(p.get("name") or ""),
-            "price": raw_mrp,
-            "mrp": raw_mrp,
+            "price": base_mrp,
+            "mrp": base_mrp,
             "salePrice": sale_price,
             "image": image,
             "info": _build_info_text(p),

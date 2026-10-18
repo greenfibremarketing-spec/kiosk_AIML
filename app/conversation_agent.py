@@ -93,17 +93,30 @@ def build_compact_catalog(catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "planter" in name_cat:
             tags.extend(["plants", "balcony", "garden"])
 
+        base_price = float(p.get("price") or p.get("salePrice") or p.get("mrp") or 0)
+        # Apply 10% kiosk discount on base price so it matches the screen exactly (1199 -> 1079, 1499 -> 1349)
+        discounted_price = round(base_price * 0.9) if base_price else 0
+
+        # Category-accurate features
+        cat_lower = (category or "").lower()
+        if "bottle" in cat_lower or "tumbler" in cat_lower:
+            prod_features = "100% upcycled rice husk biocomposite, food-grade stainless steel inner, insulated for hot or cold, hand-wash recommended, BPA-free"
+        elif "tableware" in cat_lower or "kitchen" in cat_lower or "dining" in cat_lower or "bowl" in cat_lower or "plate" in cat_lower:
+            prod_features = "100% upcycled rice husk biocomposite, zero virgin plastic, food-safe, BPA-free, microwave-reheat safe, dishwasher safe"
+        else:
+            prod_features = "100% upcycled rice husk biocomposite, durable, lightweight, eco-friendly"
+
         compact.append({
             "sku": sku,
             "name": name,
             "category": category,
-            "price": int(float(price)) if price else 0,
-            "mrp": int(float(mrp)) if mrp else 0,
+            "price": discounted_price,
+            "mrp": int(base_price),
             "colours": list(dict.fromkeys(colours)),
             "stock": p.get("stock", "in_stock"),
             "description": first_sent or "Upcycled rice-husk biocomposite lifestyle product.",
             "tags": list(set(tags)),
-            "features": "100% upcycled rice husk biocomposite, zero virgin plastic, food-safe, BPA-free, microwave-reheat safe, dishwasher safe"
+            "features": prod_features
         })
     return compact
 
@@ -498,7 +511,7 @@ def build_system_prompt(
         elif act == "SHOW_CATEGORIES":
             screen_prompt_note = "\nSCREEN DISPLAY: SHOW_CATEGORIES. Your spoken reply should invite them to browse categories on screen."
 
-    return f"""You are Greenie, a warm, concise, and knowledgeable sustainability shopping guide for Green Fibre (eco-friendly essentials made from upcycled rice husk biocomposite, zero virgin plastic).
+    return f"""You are Greenie, a confident, warm, positive shop host for Green Fibre (eco-friendly essentials made from upcycled rice husk biocomposite, zero virgin plastic). You speak simple Indian-English and are in charge of the conversation.
 
 CATALOG:
 {catalog_text}
@@ -509,23 +522,30 @@ CURRENT STATE:
 - Current Context: {json.dumps(current_context or {})}
 {name_instruction}
 
-BEHAVIOUR RULES:
-1. Speak at most 1 to 2 very short sentences (under 25 words total). Be punchy, natural and direct.
-2. No lists read aloud (the screen shows the items). No markdown, bullet points, asterisks, or dashes.
-3. Prices must be spoken as plain numbers followed by "rupees" (e.g. "799 rupees"), never invent prices.
-4. Needs mapping:
+BEHAVIOUR & PERSONA RULES:
+1. Speak 1 to 2 short sentences (max about 3, under 30 words total). Natural spoken style ("Sure!", "Great question!", "Of course!").
+2. Lead the conversation: after answering, gently offer ONE next step ("Would you like to see it in another colour?", "Shall I show you a matching pair-up?", "Would you like me to add this to your cart?").
+3. Ask only ONE question at a time. Never repeat the same sentence twice in a row. Vary your wording.
+4. Use the customer's name at most once every few turns (never in every reply).
+5. GROUNDING (CRITICAL): Only state facts that exist in the product/catalogue data or current screen.
+   - NEVER invent product details, stock, delivery times, warranty, policies, offers, discounts, certifications or prices.
+   - For bottles (Viora bottles): hand-wash is recommended for the stainless steel inner; bottles are hand-wash only, NOT dishwasher safe.
+   - Tableware pieces and bowls are microwave-reheat safe and dishwasher safe.
+   - All products have a 10% discount off retail MRP. Viora 400 ml is 1079 rupees; Viora 900 ml is 1349 rupees. Bundle pair-up has an extra {RECOMMENDATION_DISCOUNT_PERCENT}% discount.
+   - If asked about delivery or delivery tomorrow, say: "Delivery details and pin-code verification are handled right at checkout." Never promise delivery tomorrow.
+   - If the answer to a question is NOT in the data, honestly say: "Sorry, I don't have that detail right now. I can tell you about the material, colours, size and price instead."
+   - If user asks for an unlisted item (e.g. laptop, shoes): "I couldn't find that here, but you can browse our categories on screen, or tell me what you need and I'll suggest something."
+   - If user asks about unrelated topics (weather, politics, news): "I'm best at helping with our eco-friendly products. What are you looking for today?"
+6. Needs mapping:
    - gift, wedding, Diwali, birthday -> gifting products (e.g. Eco Mini Gift Packaging, Mug Sets, Eco Dining Set) -> SHOW_PRODUCTS or SHOW_CATEGORIES
    - kids or school -> bottles (e.g. Viora 400 ml is lightweight for school) -> SHOW_PRODUCTS
    - office -> bottles and mugs -> SHOW_PRODUCTS
    - kitchen or dining -> bowls, casserole, canisters -> SHOW_PRODUCTS or SHOW_PRODUCT
    - plants or balcony -> Table top planter -> SHOW_PRODUCTS or SHOW_PRODUCT
-   - compare -> show 2-3 products with SHOW_PRODUCTS and explain difference in one sentence
-   - specific product details (material, size, microwave safe, dishwasher safe, price) -> answer from catalog data. All tableware is microwave-reheat safe and dishwasher safe!
-   - if customer asks for recommendations or what goes with their item -> action SHOW_RECOMMENDATION
-   - off-topic chat (e.g. weather, jokes): answer in 1 friendly sentence, then gently invite them back.
-   - products we do not sell (e.g. phones, clothes): honestly say we don't have that, and show our closest lifestyle collection.
-   - never ask more than one question per reply.
-   - discount percentage is strictly {RECOMMENDATION_DISCOUNT_PERCENT}% (never promise other discounts).
+   - compare -> show 2-3 products with SHOW_PRODUCTS and explain difference in one concise sentence
+   - recommendations / what goes with item -> action SHOW_RECOMMENDATION
+7. No lists read aloud (the screen shows the items). No markdown, bullet points, asterisks, or dashes.
+8. Prices must be spoken as plain numbers followed by "rupees" (e.g. "799 rupees"), matching the verified catalog price.
 
 RESUME PROMPT RULE:
 {resume_rule}
@@ -1375,8 +1395,8 @@ async def stream_free_conversation(
         stream = await client.chat.completions.create(
             model=settings.groq_model_name,
             messages=llm_messages,
-            temperature=0.2,
-            max_tokens=220,
+            temperature=0.15,
+            max_tokens=200,
             stream=True,
         )
 
@@ -1620,15 +1640,15 @@ def handle_free_conversation(
             sku = prod_matched.get("sku")
 
     # 9. Mid-flow and off-topic resume prompt handling
-    if not customer_name or current_stage in ("NAME", "WAKE"):
+    # 9. Mid-flow and off-topic resume prompt handling
+    if not customer_name and current_stage in ("NAME", "WAKE"):
         if not resume_prompt:
             resume_prompt = "Before we explore, may I know your name?"
-        if not re.search(r"\bname\b", reply, re.IGNORECASE):
+        if not re.search(r"\bname\b", reply, re.IGNORECASE) and not reply.endswith("?"):
             reply = f"{reply} {resume_prompt}".strip()
     elif action_type == "NONE":
-        if not resume_prompt:
-            resume_prompt = "What would you like to explore in our sustainable collection today?"
-        if resume_prompt.lower() not in reply.lower():
+        # Only append a resume prompt if reply does not already ask a question
+        if "?" not in reply and resume_prompt and resume_prompt.lower() not in reply.lower():
             reply = f"{reply} {resume_prompt}".strip()
 
     # 10. Build full UI Action Frame
@@ -1693,9 +1713,9 @@ def match_small_talk_intent(
     # Intent 7: Speech not understood (empty, very short, noise, filler)
     if not norm or len(norm) <= 2 or re.match(r"^(?:uh|um|ah|hmm|mhm|er|eh|noise|speech|test)$", norm):
         replies = [
-            "Sorry, I couldn't catch that, it may be some noise around. Please say it again, or use the touch screen.",
-            "I didn't quite get that through the background sound. Please try saying it again, or tap on the screen.",
-            "Pardon me, I couldn't hear that clearly. Could you please repeat, or explore using the touch screen.",
+            "Sorry, I couldn't catch that, it may be some noise around. Could you say it again, or tap on the screen?",
+            "Pardon me, there seems to be a little background noise. Could you repeat that or tap on the display?",
+            "I didn't quite catch that. Would you mind repeating, or you can tap any category to explore!",
         ]
         return {"intent": "not_understood", "reply": replies[variant_idx]}
 
@@ -1738,9 +1758,9 @@ def match_small_talk_intent(
     # Intent 6: Unrelated general question (weather, news, politics, cricket, jokes, etc.)
     if re.search(r"\b(weather|temperature|forecast|rain|sunny|climate|news|politics|election|minister|president|cricket|score|match|ipl|joke|jokes|tell me a joke|capital of|time is it|what time|stock market|bitcoin)\b", norm):
         replies = [
-            "I'm best at helping with our eco-friendly products. Please tell me what you're looking for, or tap on the screen to explore.",
-            "I'm here to help you shop our sustainable collection. Tell me what you'd like to see, or browse the screen.",
-            "I specialize in our Green Fibre products. Feel free to ask about our tableware, bottles, or tap the screen.",
+            "I'm best at helping with our eco-friendly products. What are you looking for today?",
+            "I focus on our sustainable lifestyle collection here at GreenFibre. What can I help you find today?",
+            "I'm here to help you shop our sustainable essentials! Tell me what you'd like to explore.",
         ]
         return {"intent": "general_out_of_context", "reply": replies[variant_idx]}
 
@@ -1760,9 +1780,9 @@ def match_small_talk_intent(
 
     if is_unlisted_query or (has_shopping_syntax and not any(kw in norm for kw in ("bottle", "mug", "bowl", "casserole", "planter", "canister", "gift", "dining", "desk", "tissue", "storage", "green fibre", "rice husk"))):
         replies = [
-            "I couldn't find that here, but you can browse our categories on the screen, or tap the item you like. You can try the touch navigation too.",
-            "We don't have that in our collection today, but you can check our categories on the screen or tap any item to explore.",
-            "That item isn't available with us, but you can explore our eco-friendly products on the screen or ask me about our bottles and tableware.",
+            "I couldn't find that here, but you can browse our categories on screen, or tell me what you need and I'll suggest something.",
+            "We don't have that in our collection, but feel free to explore our sustainable kitchen and drinkware on screen!",
+            "I don't see that item in our catalogue, but tell me what you're looking for and I'll find our closest eco-match.",
         ]
         return {"intent": "unlisted_product", "reply": replies[variant_idx]}
 
