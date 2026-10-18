@@ -1,0 +1,724 @@
+--- a/app/config.py
++++ b/app/config.py
+@@ -39,6 +39,12 @@
+     max_ws_connections: int = Field(default=16, ge=1, le=1000)
+     max_message_chars: int = Field(default=4000, ge=1, le=100000)
+     cors_origins: str = "http://localhost:3000,http://localhost:5173"
++
++    # Default new checkout to Easebuzz; keep Razorpay for in-flight payments.
++    payment_provider: Literal['easebuzz', 'razorpay'] = 'easebuzz'
++    easebuzz_key: Optional[SecretStr] = None
++    easebuzz_salt: Optional[SecretStr] = None
++    easebuzz_env: Literal['test', 'prod'] = 'prod'
+ 
+     # Razorpay credentials stay on the server; only the key ID is public.
+     razorpay_key_id: Optional[str] = None
+--- a/app/payments.py
++++ b/app/payments.py
+@@ -8,7 +8,7 @@
+ import hmac
+ import json
+ import re
+-from typing import Annotated, Callable
++from typing import Annotated, Callable, Literal
+ from uuid import uuid4
+ from urllib.parse import urlsplit, urlencode
+ 
+@@ -32,6 +32,7 @@
+     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+     sku: str = Field(min_length=1, max_length=128)
+     quantity: int = Field(default=1, strict=True, ge=1, le=100)
++    is_pair_up: bool | None = None
+ 
+ 
+ class Customer(BaseModel):
+@@ -57,6 +58,7 @@
+     customer: Customer | None = None
+     shipping_address: ShippingAddress | None = None
+     fulfillment_method: str = Field(default='delivery', pattern=r'^delivery$')
++    payment_provider: Literal['easebuzz', 'razorpay'] | None = None
+ 
+ 
+ class VerifyPayment(BaseModel):
+@@ -67,9 +69,62 @@
+     razorpay_signature: str = Field(pattern=r'^[a-fA-F0-9]{64}$')
+ 
+ 
++class VerifySavedPayment(BaseModel):
++    model_config = ConfigDict(extra='forbid')
++    session_id: SessionID
++    database_order_id: Annotated[str, Field(pattern=r'^[a-fA-F0-9]{24}$')]
++
++
++class ReconcilePayment(BaseModel):
++    model_config = ConfigDict(extra='forbid')
++    session_id: SessionID
++
++
++def order_api_url() -> str:
++    """Preserve the deployed URL setting; fallback uses the catalogue API base."""
++    return settings.kiosk_orders_api_url or settings.greenfibre_api_base_url.rstrip('/') + '/kiosk'
++
++
++def saved_proof(data: dict, session_id: str, kiosk_id: str, *, order_id=None,
++                checkout_provider=None) -> dict:
++    """Fail closed on malformed proof; never expose secrets or customer payloads."""
++    if (data.get('saved_to_database') is not True
++            or not isinstance(data.get('database_order_id'), str)
++            or not re.fullmatch(r'[a-fA-F0-9]{24}', data['database_order_id'])
++            or type(data.get('amount')) is not int or data['amount'] <= 0
++            or data.get('currency') != 'INR' or type(data.get('paid')) is not bool
++            or data.get('session_id', session_id) != session_id
++            or data.get('kiosk_id', kiosk_id) != kiosk_id
++            or (order_id and data['database_order_id'] != order_id)):
++        raise HTTPException(502, 'Website returned invalid saved order proof.')
++    provider = data.get('payment_provider')
++    if provider not in ('easebuzz', 'razorpay', None):
++        raise HTTPException(502, 'Website returned an unsupported payment provider.')
++    if checkout_provider == 'easebuzz':
++        url = data.get('payment_url')
++        txnid = data.get('merchant_txnid')
++        host = 'pay.easebuzz.in' if settings.easebuzz_env == 'prod' else 'testpay.easebuzz.in'
++        # Strict canonical URL: no credentials, query, port or alternate host.
++        if (provider != 'easebuzz' or not isinstance(txnid, str)
++                or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', txnid)
++                or not isinstance(url, str)
++                or not re.fullmatch(r'https://' + re.escape(host) + r'/pay/[A-Za-z0-9_-]+/?', url)):
++            raise HTTPException(502, 'Website returned invalid Easebuzz checkout details.')
++    fields = ('saved_to_database', 'database_order_id', 'order_number', 'payment_provider',
++              'merchant_txnid', 'amount', 'currency', 'paid', 'status', 'order_status',
++              'confirmed_at', 'stock_conflict', 'email_status')
++    result = {k: data[k] for k in fields if k in data}
++    result['session_id'] = session_id
++    if checkout_provider == 'easebuzz':
++        result['payment_url'] = data['payment_url']
++    elif checkout_provider == 'razorpay':
++        result.update({k: data[k] for k in ('key_id', 'order_id') if k in data})
++    return result
++
++
+ def website_request(method: str, path: str, kiosk_id: str, payload=None, request_id=None) -> dict:
+     """Server-to-server only: the integration key is never returned to kiosk clients."""
+-    url = settings.kiosk_orders_api_url or ''
++    url = order_api_url()
+     parsed = urlsplit(url)
+     if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username
+             or parsed.password or parsed.query or parsed.fragment
+@@ -83,11 +138,12 @@
+         headers['Idempotency-Key'] = request_id
+     try:
+         with httpx.Client(base_url=url.rstrip('/') + '/', headers=headers,
+-                          timeout=settings.kiosk_orders_timeout_seconds) as client:
++                          timeout=settings.kiosk_orders_timeout_seconds, follow_redirects=False) as client:
+             response = client.request(method, path, json=payload)
+-            if response.status_code in (400, 401, 403, 404, 409, 422, 503):
++            if response.status_code in (400, 401, 403, 404, 409, 422, 429, 503):
+                 raise HTTPException(response.status_code, 'Website order service rejected the request. Check customer details, stock, credentials and order status.')
+-            response.raise_for_status()
++            if response.status_code not in (200, 201):
++                raise ValueError('Unexpected order service response')
+             data = response.json()
+             if not isinstance(data, dict) or data.get('saved_to_database') is not True:
+                 raise ValueError('Invalid order proof')
+@@ -190,13 +246,22 @@
+     @router.post('/orders', status_code=201)
+     def create_order(body: CreateOrder, request: Request):
+         kiosk_id = authenticate(request)
+-        if settings.kiosk_orders_api_url:
++        provider = body.payment_provider or settings.payment_provider
++        # Never silently fall back to Razorpay after an Easebuzz failure.
++        if provider == 'easebuzz' or settings.kiosk_orders_api_url:
+             request_id = request.headers.get('Idempotency-Key', '')
+             if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id):
+                 raise HTTPException(422, 'Idempotency-Key header is required for saved orders.')
+             if not body.customer or (body.fulfillment_method == 'delivery' and not body.shipping_address):
+                 raise HTTPException(422, 'Customer name, email, phone and delivery address are required.')
+-            return website_request('POST', 'orders', kiosk_id, body.model_dump(exclude_none=True), request_id)
++            payload = body.model_dump(exclude_none=True)
++            if provider == 'easebuzz':
++                payload['payment_provider'] = 'easebuzz'
++            else:
++                # Preserve the deployed Razorpay website contract.
++                payload.pop('payment_provider', None)
++            data = website_request('POST', 'orders', kiosk_id, payload, request_id)
++            return saved_proof(data, body.session_id, kiosk_id, checkout_provider=provider)
+         key_id, _ = credentials()
+         amount, lines = checkout_total(body.items)
+         receipt = 'kiosk_' + uuid4().hex
+@@ -219,10 +284,15 @@
+                 'currency': 'INR', 'receipt': receipt, 'items': lines, 'status': 'created'}
+ 
+     @router.post('/verify')
+-    def verify_payment(body: VerifyPayment, request: Request):
++    def verify_payment(body: VerifySavedPayment | VerifyPayment, request: Request):
+         kiosk_id = authenticate(request)
++        if isinstance(body, VerifySavedPayment):
++            data = website_request('POST', f'orders/{body.database_order_id}/reconcile',
++                                   kiosk_id, {'session_id': body.session_id})
++            return saved_proof(data, body.session_id, kiosk_id, order_id=body.database_order_id)
+         if settings.kiosk_orders_api_url:
+-            return website_request('POST', 'payments/verify', kiosk_id, body.model_dump())
++            data = website_request('POST', 'payments/verify', kiosk_id, body.model_dump())
++            return saved_proof(data, body.session_id, kiosk_id)
+         _, secret = credentials()
+         order = owned_order(body.razorpay_order_id, body.session_id, kiosk_id)
+         expected = hmac.new(secret.encode(),
+@@ -245,18 +315,47 @@
+     @router.get('/orders/{order_id}')
+     def get_order(order_id: SavedOrderID, session_id: SessionID, request: Request):
+         kiosk_id = authenticate(request)
+-        if settings.kiosk_orders_api_url:
+-            return website_request('GET', f'orders/{order_id}?' + urlencode({'session_id': session_id}), kiosk_id)
++        if settings.kiosk_orders_api_url or not order_id.startswith('order_'):
++            data = website_request('GET', f'orders/{order_id}?' + urlencode({'session_id': session_id}), kiosk_id)
++            return saved_proof(data, session_id, kiosk_id, order_id=order_id)
+         if not order_id.startswith('order_'):
+             raise HTTPException(422, 'Database order lookup requires the website order service.')
+         return order_status(owned_order(order_id, session_id, kiosk_id))
+ 
+     @router.post('/orders/{database_order_id}/reconcile')
+     def reconcile_order(database_order_id: Annotated[str, Field(pattern=r'^[a-fA-F0-9]{24}$')],
+-                        session_id: SessionID, request: Request):
++                        request: Request, session_id: SessionID | None = None,
++                        body: ReconcilePayment | None = None):
+         kiosk_id = authenticate(request)
+-        if not settings.kiosk_orders_api_url:
+-            raise HTTPException(503, 'Website order service is not configured.')
+-        return website_request('POST', f'orders/{database_order_id}/reconcile', kiosk_id, {'session_id': session_id})
++        if body and session_id and body.session_id != session_id:
++            raise HTTPException(422, 'Conflicting session IDs.')
++        sid = body.session_id if body else session_id
++        if not sid:
++            raise HTTPException(422, 'session_id is required.')
++        data = website_request('POST', f'orders/{database_order_id}/reconcile', kiosk_id, {'session_id': sid})
++        return saved_proof(data, sid, kiosk_id, order_id=database_order_id)
+ 
+     return router
++
++
++def authenticate_payment(request: Request) -> str:
++    from app.server import verify_kiosk_auth
++    if not request.headers.get('X-Kiosk-ID'):
++        raise HTTPException(401, 'X-Kiosk-ID header is required.')
++    # Payment endpoints require actual authentication even during local testing.
++    if not settings.kiosk_auth_secret or not settings.kiosk_auth_secret.get_secret_value().strip():
++        raise HTTPException(503, 'Kiosk payment authentication is not configured.')
++    if not request.headers.get('X-Kiosk-Token') and not request.headers.get('Authorization'):
++        raise HTTPException(401, 'Kiosk authentication token is required.')
++    kiosk_id = verify_kiosk_auth(request, claimed_kiosk_id=request.headers['X-Kiosk-ID'])
++    from app.sessions import session_manager
++    sid = request.query_params.get('session_id')
++    if sid and (owner := session_manager.get_session_kiosk(sid)) and owner != kiosk_id:
++        raise HTTPException(403, 'Cross-kiosk session access denied.')
++    return kiosk_id
++
++
++# Support both this checkout's router import and Ubuntu's router factory import.
++router = APIRouter()
++router.include_router(create_payment_router(authenticate_payment))
++router.include_router(create_payment_router(authenticate_payment), prefix='/v1')
+--- a/tests/test_payments.py
++++ b/tests/test_payments.py
+@@ -17,6 +17,7 @@
+ 
+ @pytest.fixture
+ def checkout(monkeypatch):
++    monkeypatch.setattr(settings, 'payment_provider', 'razorpay')
+     monkeypatch.setattr(settings, 'kiosk_orders_api_url', None)
+     monkeypatch.setattr(settings, 'razorpay_key_id', 'rzp_test_dummy')
+     monkeypatch.setattr(settings, 'razorpay_key_secret', SecretStr('dummy-secret'))
+--- /dev/null
++++ b/tests/test_easebuzz_payments.py
+@@ -0,0 +1,209 @@
++"""Easebuzz client contract and failure checks; no real payment operations."""
++from copy import deepcopy
++import json
++
++from fastapi import FastAPI
++from fastapi.testclient import TestClient
++import httpx
++from pydantic import SecretStr
++import pytest
++
++from app import payments
++from app.config import settings
++
++ORDER_ID = 'a' * 24
++HEADERS = {'X-Kiosk-ID': 'kiosk-1', 'Idempotency-Key': 'stable-checkout-1'}
++BODY = {'session_id': 's1', 'items': [{'sku': 'GF:abc:red', 'quantity': 2}],
++        'customer': {'name': 'Test Customer', 'email': 'test@example.com', 'phone': '9876543210'},
++        'shipping_address': {'streetAddress': 'Test street', 'city': 'Mumbai',
++                             'state': 'Maharashtra', 'pincode': '400001'}}
++
++
++def proof(**changes):
++    return {'saved_to_database': True, 'database_order_id': ORDER_ID,
++            'payment_provider': 'easebuzz', 'merchant_txnid': 'K123abc',
++            'payment_url': 'https://pay.easebuzz.in/pay/abc123', 'paid': False,
++            'amount': 24690, 'currency': 'INR', 'session_id': 's1', 'kiosk_id': 'kiosk-1',
++            'order_status': 'pending_payment', **changes}
++
++
++@pytest.fixture
++def checkout(monkeypatch):
++    monkeypatch.setattr(settings, 'payment_provider', 'easebuzz')
++    monkeypatch.setattr(settings, 'easebuzz_env', 'prod')
++    monkeypatch.setattr(settings, 'kiosk_orders_api_url', 'https://orders.example/api/kiosk')
++    monkeypatch.setattr(settings, 'kiosk_orders_api_key', SecretStr('x' * 64))
++    api = FastAPI()
++    api.include_router(payments.create_payment_router(lambda req: req.headers['X-Kiosk-ID']))
++    return TestClient(api)
++
++
++def service(monkeypatch, handler):
++    original = httpx.Client
++    monkeypatch.setattr(payments.httpx, 'Client', lambda **kw: original(
++        transport=httpx.MockTransport(handler), **kw))
++
++
++def test_checkout_forwards_same_key_and_pair_up_without_secrets(checkout, monkeypatch):
++    calls = []
++
++    def handle(request):
++        calls.append(request)
++        assert str(request.url) == 'https://orders.example/api/kiosk/orders'
++        assert request.headers['X-API-Key'] == 'x' * 64
++        assert request.headers['Idempotency-Key'] == 'stable-checkout-1'
++        assert request.headers['X-Kiosk-ID'] == 'kiosk-1'
++        payload = json.loads(request.content)
++        assert payload['payment_provider'] == 'easebuzz'
++        assert payload['items'][0]['is_pair_up'] is True
++        assert 'amount' not in payload and 'salt' not in payload
++        return httpx.Response(201, json=proof(salt='private', customer=BODY['customer']))
++
++    service(monkeypatch, handle)
++    body = deepcopy(BODY)
++    body['items'][0]['is_pair_up'] = True
++    first = checkout.post('/payments/orders', json=body, headers=HEADERS)
++    second = checkout.post('/payments/orders', json=body, headers=HEADERS)
++    assert first.status_code == second.status_code == 201
++    assert first.json() == second.json()
++    assert first.json()['paid'] is False
++    assert 'salt' not in first.json() and 'customer' not in first.json()
++    assert len(calls) == 2  # Upstream owns durable idempotency across workers.
++
++
++@pytest.mark.parametrize('changes', [
++    {'payment_provider': 'razorpay'}, {'payment_provider': None},
++    {'amount': True}, {'amount': '123'}, {'currency': 'USD'}, {'paid': 'true'},
++    {'saved_to_database': False}, {'database_order_id': 'fake'},
++    {'kiosk_id': 'other'}, {'session_id': 'other'}, {'merchant_txnid': ''},
++    {'payment_url': 'https://pay.easebuzz.in.evil.example/pay/abc'},
++    {'payment_url': 'https://pay.easebuzz.in/pay/'},
++    {'payment_url': 'https://testpay.easebuzz.in/pay/abc'},
++    {'payment_url': 'https://pay.easebuzz.in/pay/abc?redirect=evil'},
++    {'payment_url': 'https://user@pay.easebuzz.in/pay/abc'},
++])
++def test_invalid_checkout_proof_fails_closed(checkout, monkeypatch, changes):
++    service(monkeypatch, lambda req: httpx.Response(200, json=proof(**changes)))
++    assert checkout.post('/payments/orders', json=BODY, headers=HEADERS).status_code == 502
++
++
++@pytest.mark.parametrize('status', [301, 401, 403, 404, 409, 422, 429, 500])
++def test_error_bodies_never_expose_secrets(checkout, monkeypatch, status):
++    service(monkeypatch, lambda req: httpx.Response(status, json={'error': 'private provider data'}))
++    response = checkout.post('/payments/orders', json=BODY, headers=HEADERS)
++    assert response.status_code >= 400
++    assert 'private provider data' not in response.text
++
++
++def test_timeout_never_retries_or_falls_back_to_razorpay(checkout, monkeypatch):
++    calls = []
++
++    def handle(request):
++        calls.append(request)
++        raise httpx.ReadTimeout('private')
++
++    service(monkeypatch, handle)
++    monkeypatch.setattr(payments, 'provider_request', lambda *a: pytest.fail('Unexpected Razorpay fallback'))
++    response = checkout.post('/payments/orders', json=BODY, headers=HEADERS)
++    assert response.status_code == 504 and len(calls) == 1
++    assert 'same Idempotency-Key' in response.text and 'private' not in response.text
++
++
++@pytest.mark.parametrize('endpoint,body', [
++    ('/payments/verify', {'database_order_id': ORDER_ID, 'session_id': 's1'}),
++    (f'/payments/orders/{ORDER_ID}/reconcile', {'session_id': 's1'}),
++    (f'/payments/orders/{ORDER_ID}/reconcile?session_id=s1', None),
++])
++def test_reconciliation_uses_backend_and_stays_pending(checkout, monkeypatch, endpoint, body):
++    def handle(request):
++        assert request.method == 'POST'
++        assert request.url.path == f'/api/kiosk/orders/{ORDER_ID}/reconcile'
++        assert json.loads(request.content) == {'session_id': 's1'}
++        return httpx.Response(200, json=proof())
++
++    service(monkeypatch, handle)
++    response = checkout.post(endpoint, json=body, headers=HEADERS)
++    assert response.status_code == 200
++    assert response.json()['paid'] is False
++    assert 'payment_url' not in response.json()
++
++
++def test_status_accepts_paid_only_from_saved_backend(checkout, monkeypatch):
++    def handle(request):
++        assert request.method == 'GET' and request.url.params['session_id'] == 's1'
++        return httpx.Response(200, json=proof(paid=True, order_status='confirmed'))
++
++    service(monkeypatch, handle)
++    response = checkout.get(f'/payments/orders/{ORDER_ID}?session_id=s1', headers=HEADERS)
++    assert response.status_code == 200 and response.json()['paid'] is True
++
++
++def test_wrong_saved_order_rejected(checkout, monkeypatch):
++    service(monkeypatch, lambda req: httpx.Response(200, json=proof(database_order_id='b' * 24)))
++    assert checkout.get(f'/payments/orders/{ORDER_ID}?session_id=s1', headers=HEADERS).status_code == 502
++
++
++def test_browser_cannot_assert_payment(checkout):
++    assert checkout.post('/payments/verify', headers=HEADERS, json={
++        'database_order_id': ORDER_ID, 'session_id': 's1', 'paid': True}).status_code == 422
++
++
++def test_required_key_idempotency_and_customer(checkout, monkeypatch):
++    assert checkout.post('/payments/orders', headers={'X-Kiosk-ID': 'kiosk-1'}, json=BODY).status_code == 422
++    body = deepcopy(BODY)
++    body.pop('customer')
++    assert checkout.post('/payments/orders', headers=HEADERS, json=body).status_code == 422
++    monkeypatch.setattr(settings, 'kiosk_orders_api_key', None)
++    assert checkout.post('/payments/orders', headers=HEADERS, json=BODY).status_code == 503
++
++
++def test_fallback_url_keeps_existing_base_setting(checkout, monkeypatch):
++    monkeypatch.setattr(settings, 'kiosk_orders_api_url', None)
++    monkeypatch.setattr(settings, 'greenfibre_api_base_url', 'https://orders.example/api')
++    assert payments.order_api_url() == 'https://orders.example/api/kiosk'
++
++
++def test_production_rejects_forged_token(monkeypatch):
++    from app import server
++    from app.coordination import local_coordinator
++    monkeypatch.setattr(server, 'get_coordinator', lambda: local_coordinator)
++    monkeypatch.setattr(settings, 'environment', 'production')
++    monkeypatch.setattr(settings, 'kiosk_auth_secret', SecretStr('real-secret'))
++    client = TestClient(server.api)
++    for prefix in ('', '/v1'):
++        response = client.post(prefix + '/payments/orders', json=BODY,
++            headers={**HEADERS, 'X-Kiosk-Token': 'forged'})
++        assert response.status_code == 401
++
++
++def test_test_environment_requires_test_host(checkout, monkeypatch):
++    monkeypatch.setattr(settings, 'easebuzz_env', 'test')
++    service(monkeypatch, lambda req: httpx.Response(201, json=proof(
++        payment_url='https://testpay.easebuzz.in/pay/abc123')))
++    assert checkout.post('/payments/orders', json=BODY, headers=HEADERS).status_code == 201
++
++
++def test_preflight_reports_configuration_without_network(checkout, monkeypatch, capsys):
++    from scripts.check_payment_readiness import main
++    import sys
++    monkeypatch.setattr(sys, 'argv', ['check_payment_readiness.py'])
++    monkeypatch.setattr(settings, 'environment', 'production')
++    monkeypatch.setattr(settings, 'kiosk_auth_secret', SecretStr('auth-secret'))
++    monkeypatch.setattr(settings, 'kiosk_gateway_key', SecretStr('gateway-secret'))
++    monkeypatch.setattr(settings, 'allowed_kiosk_ids', 'kiosk-1')
++    monkeypatch.setattr(settings, 'checkpointer_backend', 'mongodb')
++    monkeypatch.setattr(settings, 'greeny_ai_mongo_url', SecretStr('mongodb://not-contacted'))
++    service(monkeypatch, lambda req: pytest.fail('Default preflight must not contact network'))
++    assert main() == 0
++    report = json.loads(capsys.readouterr().out)
++    assert report['configuration_passed'] is True
++    assert report['order_service_authentication'] == 'not_checked'
++    assert report['merchant_credentials_and_live_payment'] == 'not_verified'
++    assert 'auth-secret' not in json.dumps(report)
++
++
++def test_invalid_environment_rejected():
++    from app.config import Settings
++    from pydantic import ValidationError
++    with pytest.raises(ValidationError):
++        Settings(_env_file=None, easebuzz_env='production')
+--- /dev/null
++++ b/scripts/check_payment_readiness.py
+@@ -0,0 +1,84 @@
++"""Read-only Ubuntu/local payment preflight. Never initiates or reconciles payment."""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import re
++import sys
++from urllib.parse import urlsplit
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--order-id', help='Existing saved order ID for a read-only authenticated GET')
++    parser.add_argument('--session-id')
++    parser.add_argument('--kiosk-id')
++    args = parser.parse_args()
++    # Do not render validation errors: environment inputs may contain secrets.
++    try:
++        from app.config import settings
++    except Exception:
++        print(json.dumps({'configuration_valid': False, 'error': 'Settings failed validation; check environment variable names and types.'}))
++        return 1
++    url = settings.kiosk_orders_api_url or settings.greenfibre_api_base_url.rstrip('/') + '/kiosk'
++    try:
++        parsed = urlsplit(url)
++        https = (parsed.scheme == 'https' and bool(parsed.hostname) and not parsed.username
++                 and not parsed.password and not parsed.query and not parsed.fragment)
++    except ValueError:
++        https = False
++    present = lambda value: bool(value and value.get_secret_value().strip())
++    checks = {
++        'production_environment': settings.environment == 'production',
++        'new_checkout_uses_easebuzz': settings.payment_provider == 'easebuzz',
++        'live_easebuzz_environment': settings.easebuzz_env == 'prod',
++        'order_api_https': bool(https),
++        'integration_key_configured': bool(settings.kiosk_orders_api_key and
++            len(settings.kiosk_orders_api_key.get_secret_value()) >= 32),
++        'kiosk_auth_secret_configured': present(settings.kiosk_auth_secret),
++        'kiosk_gateway_key_configured': present(settings.kiosk_gateway_key),
++        'explicit_kiosk_allowlist': bool(settings.allowed_kiosk_ids.strip() and settings.allowed_kiosk_ids.strip() != '*'),
++        'shared_mongodb_configured': settings.checkpointer_backend == 'mongodb' and present(settings.greeny_ai_mongo_url),
++    }
++    report = {
++        'checks': checks, 'configuration_passed': all(checks.values()),
++        'order_service_authentication': 'not_checked',
++        'merchant_credentials_and_live_payment': 'not_verified',
++        'source_sha256': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
++                          for name in ('app/payments.py', 'app/config.py')},
++    }
++    if any((args.order_id, args.session_id, args.kiosk_id)):
++        if not (args.order_id and args.session_id and args.kiosk_id
++                and re.fullmatch(r'[a-fA-F0-9]{24}', args.order_id)):
++            parser.error('Provide --order-id (24 hex characters), --session-id and --kiosk-id together.')
++        if not all(checks.values()):
++            report['order_service_authentication'] = 'skipped_configuration_failed'
++        else:
++            try:
++                import httpx
++                with httpx.Client(timeout=settings.kiosk_orders_timeout_seconds, follow_redirects=False) as client:
++                    response = client.get(url.rstrip('/') + '/orders/' + args.order_id,
++                        params={'session_id': args.session_id}, headers={
++                            'X-API-Key': settings.kiosk_orders_api_key.get_secret_value(),
++                            'X-Kiosk-ID': args.kiosk_id, 'Cache-Control': 'no-store'})
++                report['order_service_http_status'] = response.status_code
++                if response.status_code != 200:
++                    raise ValueError('Read rejected')
++                from app.payments import saved_proof
++                data = response.json()
++                if not isinstance(data, dict):
++                    raise ValueError('Invalid proof')
++                saved_proof(data, args.session_id, args.kiosk_id, order_id=args.order_id)
++                report['order_service_authentication'] = 'accepted_existing_saved_order'
++            except Exception:
++                report['order_service_authentication'] = 'failed_or_invalid_saved_proof'
++    print(json.dumps(report, indent=2))
++    return 0 if all(checks.values()) and report['order_service_authentication'] in (
++        'not_checked', 'accepted_existing_saved_order') else 1
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+--- /dev/null
++++ b/docs/EASEBUZZ_PRODUCTION_ROLLOUT.md
+@@ -0,0 +1,193 @@
++# Easebuzz production rollout
++
++## Production addresses
++
++The public Kiosk_AIML backend is **https://kioskai.greenfibre.org**. Keep the
++existing `greenie` systemd service and `/opt/greenie_kiosk` working directory.
++No payment-controller hostname change is needed: the reverse proxy forwards
++requests from this domain to the existing API on port 5007.
++
++| Purpose | Address |
++| --- | --- |
++| Kiosk backend health | `https://kioskai.greenfibre.org/health` |
++| Create kiosk checkout | `https://kioskai.greenfibre.org/payments/orders` |
++| Verify/reconcile after checkout | `https://kioskai.greenfibre.org/payments/verify` |
++| Saved order status | `https://kioskai.greenfibre.org/payments/orders/{database_order_id}?session_id=...` |
++| Versioned payment endpoints | `https://kioskai.greenfibre.org/v1/payments/...` |
++| Greenfibre order service used by this backend | `https://api.greenfibre.org/api/kiosk` |
++
++Configure the frontend's API base URL as `https://kioskai.greenfibre.org`.
++The payment create/verify/status requests still require kiosk authentication.
++Do not change `KIOSK_ORDERS_API_URL` to the kiosk backend domain: it targets
++the separate Greenfibre order service and must not loop back to this API.
++Easebuzz callbacks remain on the Greenfibre payment backend, as specified in
++the implementation guide; this patch does not add a public gateway callback here.
++
++### HTTPS, reverse proxy and CORS
++
++Confirm DNS for `kioskai.greenfibre.org` points to the Ubuntu server and that the
++existing reverse proxy serves a valid TLS certificate for this hostname. Preserve
++the existing proxy configuration, including WebSocket upgrade forwarding for
++`/ws/...`, and forward API paths unchanged to `http://127.0.0.1:5007` when the proxy
++runs on that same host. Use the existing internal upstream if your proxy runs
++elsewhere. Do not replace the working service or proxy configuration with a
++generic template. `HOST`/`PORT` environment settings do not override an explicit
++Gunicorn `--bind` in the systemd `ExecStart` command.
++
++`CORS_ORIGINS` must list the **frontend origins**, not merely this backend's
++hostname. The frontend hostname has not been supplied. Obtain its exact origin
++(scheme, hostname and optional port; no URL path or trailing slash) from the
++frontend team and configure an explicit allowlist on Ubuntu. The current
++middleware enables credentials, so do not use `CORS_ORIGINS=*` for this rollout.
++If the frontend is actually served from `https://kioskai.greenfibre.org` too,
++requests to that same origin do not require cross-origin permission. Setting
++the backend hostname alone does not authorize a frontend hosted on another domain.
++
++## What this change does
++
++New checkouts default to `PAYMENT_PROVIDER=easebuzz` and call the Greenfibre
++website order service. The website owns prices/discounts, durable payment
++attempts, idempotency conflicts, gateway signing/callbacks, reconciliation,
++inventory updates and email. The kiosk never substitutes local memory for an
++order ledger and never confirms payment from a browser claim.
++
++The controller is based on the deployed `9b1331424b9be5f1f1736efa26e2a666d7260b54`
++payment module. Existing Razorpay signature/capture checks remain available for
++in-flight standalone payments. Website Razorpay verification still uses the
++website service. Keep the old credentials until those payments are resolved.
++The original Ubuntu router factory and the local router import are both supported.
++
++## Server environment
++
++Keep existing secrets/settings in `/opt/greenie_kiosk/.env`, which your `greenie`
++service loads through `EnvironmentFile`. Add or confirm these on Ubuntu:
++
++```dotenv
++PAYMENT_PROVIDER=easebuzz
++KIOSK_ORDERS_API_URL=https://api.greenfibre.org/api/kiosk
++KIOSK_ORDERS_API_KEY=<same private integration key configured on Greenfibre>
++KIOSK_ORDERS_TIMEOUT_SECONDS=20
++EASEBUZZ_ENV=prod
++# Set CORS_ORIGINS to the confirmed frontend origin(s), not a wildcard.
++```
++
++`KIOSK_ORDERS_API_URL` is intentionally supported, matching the deployed controller.
++If absent, the URL is derived from `GREENFIBRE_API_BASE_URL` plus `/kiosk`.
++Earlier advice that this variable was ignored applied to a different local version.
++The shared integration key must contain at least 32 characters. Merchant
++`EASEBUZZ_KEY`/`EASEBUZZ_SALT` belong on the Greenfibre backend. Local settings
++accept those names but do not use or transmit them; this kiosk delegates signing.
++`EASEBUZZ_ENV` selects the allowed checkout URL host; it must match Greenfibre.
++
++Production also requires the existing `ENVIRONMENT=production`, kiosk auth and
++gateway secrets, explicit `ALLOWED_KIOSK_IDS`, and shared MongoDB coordination.
++The readiness script checks these without displaying secrets. Do not simply
++change ENVIRONMENT on a server lacking those existing production dependencies.
++Payment configuration errors fail payment requests; they do not enable a fake
++fallback or force unrelated chat services to stop.
++
++## Required Greenfibre and frontend behavior
++
++Greenfibre must already implement the supplied Easebuzz implementation guide:
++
++- `POST /api/kiosk/orders` accepts `payment_provider: "easebuzz"`, persists the
++  order/attempt before returning, calculates totals, and enforces stable
++  `Idempotency-Key` requests including changed-payload conflicts.
++- Authenticated GET `/api/kiosk/orders/{database_order_id}?session_id=...` and POST
++  `/api/kiosk/orders/{database_order_id}/reconcile` enforce saved kiosk/session
++  ownership. Reconcile accepts JSON `{"session_id":"..."}`.
++- Payment success is established using verified Easebuzz server-side results,
++  with callback authentication, exact amount/identity checks and durable recovery.
++- Proof includes `saved_to_database: true`, a 24-hex `database_order_id`, integer
++  paise `amount`, `currency: "INR"`, boolean `paid`, and existing order proof fields.
++  Checkout includes `payment_provider: "easebuzz"`, `merchant_txnid`, and an
++  HTTPS hosted `payment_url` on `pay.easebuzz.in` (or `testpay.easebuzz.in` in test).
++- Preserve Razorpay verification/reconciliation for old orders during migration.
++- Optional `is_pair_up` cart flags are forwarded when supplied; the website must
++  validate discount eligibility and calculate the amount itself.
++
++Kiosk clients retain `/payments/*` and `/v1/payments/*`. Creation requires valid
++kiosk auth, customer/address and a stable `Idempotency-Key`; retry identical
++requests with the same key after timeouts. The response is HTTP 201. Open
++`payment_url` as hosted checkout instead of launching Razorpay JavaScript.
++Verify now also accepts `{"database_order_id":"...","session_id":"..."}`;
++this triggers backend reconciliation and may still return `paid: false`.
++Poll the saved order after return with bounded backoff. Only `paid: true`
++permits completion. Browser success fields are rejected.
++
++This repository does not contain the Greenfibre order backend or kiosk frontend.
++Their implementation and actual provider responses must be verified before
++customer traffic is switched. No mocked test establishes merchant onboarding,
++live credential validity, settlement or successful fulfillment.
++
++## Apply narrowly on the supplied Ubuntu release
++
++`deploy/easebuzz-production.patch` is generated against your supplied Ubuntu
++commit. It modifies the payment controller/configuration, adjusts the existing
++Razorpay tests to explicitly select their provider, and adds Easebuzz tests and
++the read-only readiness script. It does not alter `.env`, server.py, RAG, ML data,
++service configuration or unrelated modules. It contains no merchant credentials.
++
++Transfer the patch to `/tmp/easebuzz-production.patch`. First save a backup of
++the two tracked code files and the server `.env` in an administrator-only location.
++Keep the frontend on the existing flow until the dependencies above are verified.
++From `/opt/greenie_kiosk`:
++
++```bash
++git rev-parse HEAD
++git diff -- app/config.py app/payments.py tests/test_payments.py
++git apply --check /tmp/easebuzz-production.patch
++```
++
++If the check fails, stop and review the actual server changes; do not force the
++patch or replace the entire application directory. If it passes:
++
++```bash
++git apply /tmp/easebuzz-production.patch
++.venv/bin/python -m pytest tests/test_payments.py tests/test_easebuzz_payments.py -q
++.venv/bin/python scripts/check_payment_readiness.py
++```
++
++The preflight is read-only and makes no network request by default. All checks
++passing means configuration is present, not that credentials have been accepted
++by either service. For an existing saved order belonging to a known kiosk/session:
++
++```bash
++.venv/bin/python scripts/check_payment_readiness.py \
++  --order-id EXISTING_24_HEX_ORDER_ID --session-id EXISTING_SESSION --kiosk-id EXISTING_KIOSK
++```
++
++This optional mode sends only an authenticated GET and validates saved proof.
++It neither creates orders nor reconciles payments. A 401/403 may be integration
++authentication/ownership failure; a 404 does not prove the key is valid or invalid.
++It cannot verify Easebuzz merchant credentials. Do not invent an order and treat
++its 404 as a successful authentication check.
++
++Once backend/frontend staging and production configuration are confirmed, restart
++the existing service as part of the approved deployment. Run these commands on
++Ubuntu only after the patch tests and required configuration checks pass:
++
++```bash
++sudo systemctl restart greenie
++sudo systemctl is-active greenie
++curl --fail --silent --show-error http://127.0.0.1:5007/health
++curl --fail --silent --show-error https://kioskai.greenfibre.org/health
++```
++
++The public health check validates the public HTTPS route; it does not validate
++Easebuzz credentials or create a payment. If local health succeeds but public
++health fails, inspect DNS/TLS/reverse-proxy routing before exposing checkout.
++Do not use `curl -k` to bypass certificate errors. If a proxy configuration change
++is necessary, validate its configuration before reloading it.
++
++A standalone preflight process reads its own environment and
++`.env`; systemd EnvironmentFile/overrides can differ. Service restart is required
++to load changed environment settings. Do not paste `systemctl ... Environment`,
++raw `/proc/.../environ`, or `.env` contents into chat or logs.
++
++Run a controlled sandbox end-to-end transaction first. A separately authorized
++low-value live payment must then confirm order/payment/inventory/email records
++and recovery before admitting customers. Disable new checkouts during a partial
++rollout. For rollback, switch new checkout selection back to Razorpay where
++supported, while keeping callbacks and reconciliation for in-flight Easebuzz
++orders active on Greenfibre; do not erase payment records.

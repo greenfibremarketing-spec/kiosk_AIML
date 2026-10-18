@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     max_message_chars: int = Field(default=4000, ge=1, le=100000)
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    # New checkout provider; keep Razorpay credentials for in-flight payments.
+    payment_provider: Literal['easebuzz', 'razorpay'] = 'easebuzz'
+    razorpay_key_id: Optional[str] = None
+    razorpay_key_secret: Optional[SecretStr] = None
+    razorpay_timeout_seconds: float = Field(default=10, gt=0, le=30)
+    kiosk_orders_api_url: Optional[str] = None
+    kiosk_orders_api_key: Optional[SecretStr] = None
+    kiosk_orders_timeout_seconds: float = Field(default=20, gt=0, le=60)
+    easebuzz_key: Optional[SecretStr] = None
+    easebuzz_salt: Optional[SecretStr] = None
+    easebuzz_env: Literal['test', 'prod'] = 'prod'
+
     # RAG & Knowledge Paths
     knowledge_dir: str = "data/knowledge"
     products_file: str = "data/products.json"
