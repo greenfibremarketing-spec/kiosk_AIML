@@ -647,10 +647,10 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
     claimed_kiosk_id = websocket.query_params.get("kiosk_id") or websocket.headers.get("x-kiosk-id")
     verified_kiosk_id = "kiosk-default"
 
-    if secret or is_prod:
+    if kiosk_token:
         try:
             verified_kiosk_id = verify_kiosk_token_internal(
-                token=kiosk_token or "",
+                token=kiosk_token,
                 claimed_kiosk_id=claimed_kiosk_id,
                 secret=secret,
                 ttl_seconds=settings.kiosk_token_ttl_seconds,
