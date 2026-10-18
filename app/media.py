@@ -43,19 +43,19 @@ def get_intro_playlist() -> dict:
 router = APIRouter(prefix='/media', tags=['media'])
 
 
-@router.get('/intro-videos')
+@router.api_route('/intro-videos', methods=['GET', 'HEAD'])
 def intro_videos():
     """Available before authentication so the welcome screen can preload videos."""
     return get_intro_playlist()
 
 
-@router.get('/intro-player.js')
+@router.api_route('/intro-player.js', methods=['GET', 'HEAD'])
 def intro_player():
     player_path = Path(__file__).parent / 'static' / 'intro-player.js'
     return FileResponse(player_path, media_type='text/javascript')
 
 
-@router.get('/demo')
+@router.api_route('/demo', methods=['GET', 'HEAD'])
 def intro_demo():
     demo_path = Path(__file__).parent / 'static' / 'demo.html'
     if demo_path.exists():
