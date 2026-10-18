@@ -4,6 +4,7 @@
 > - **REST:** `http://localhost:5007`
 > - **WebSocket:** `ws://localhost:5007`
 > - **Protocol Version:** `v=2`
+> - **Welcome Intro Videos:** `GET /media/intro-videos` and `GET /media/demo` (See [docs/intro-videos.md](docs/intro-videos.md))
 
 ---
 

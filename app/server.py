@@ -290,6 +290,10 @@ api.add_middleware(
 from app.payments import router as payments_router
 api.include_router(payments_router)
 
+from app.media import router as media_router, get_intro_playlist
+api.include_router(media_router)
+api.include_router(media_router, prefix='/v1')
+
 
 @api.middleware('http')
 async def request_metadata(request, call_next):
@@ -745,8 +749,10 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
     is_fast_flow = websocket.query_params.get('flow') == 'fast' or websocket.query_params.get('auto_greet') in ('1', 'true', 'yes') or session_id.startswith('fast-')
     auto_greet = websocket.query_params.get('auto_greet') in ('1', 'true', 'yes') or (session_id.startswith('fast-') and websocket.query_params.get('auto_greet') != 'false')
 
-    # ── Auto-greet: kiosk starts the conversation without waiting for the user ──
-    if auto_greet:
+    # New frontends opt in to intro welcome videos; existing clients retain immediate greeting
+    intro_pending = auto_greet and is_v2 and websocket.query_params.get('intro') in ('1', 'true', 'yes')
+
+    async def send_auto_greeting():
         try:
             def _greet():
                 return fast_transition(session_id, "hello")
@@ -766,6 +772,12 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
         except Exception as _ge:
             logger.warning('Auto-greet failed: %s', type(_ge).__name__)
 
+    if intro_pending:
+        await send('action', {'action': 'SHOW_INTRO_VIDEOS', **get_intro_playlist(),
+                              'awaiting_intro_done': True}, {'turn_id': 'intro-0'})
+    elif auto_greet:
+        await send_auto_greeting()
+
     # ── Silence detection: pushed every 8 s of no WS activity ─────────────
     _SILENCE_INTERVAL = 8.0
     _last_activity: list = [asyncio.get_event_loop().time()]
@@ -775,6 +787,8 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             await asyncio.sleep(_SILENCE_INTERVAL)
             if disconnected.is_set():
                 break
+            if intro_pending:
+                continue
             idle = asyncio.get_event_loop().time() - _last_activity[0]
             if idle >= _SILENCE_INTERVAL - 0.5:
                 frame = silence_tick(session_id)
@@ -1144,6 +1158,16 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 continue
 
             ev_type = payload.get('event') or payload.get('type')
+            if ev_type in ('intro_done', 'intro_skipped', 'intro_failed'):
+                if intro_pending:
+                    intro_pending = False
+                    _last_activity[0] = asyncio.get_event_loop().time()
+                    await send_auto_greeting()
+                continue
+            if intro_pending:
+                await send('error', 'Finish or skip the welcome videos before starting.',
+                           {'code': 'intro_in_progress'})
+                continue
             if ev_type in ('name_submitted', 'name_skipped', 'screen_changed'):
                 from app.fast_flow import get_ff
                 ctx = get_ff(session_id)

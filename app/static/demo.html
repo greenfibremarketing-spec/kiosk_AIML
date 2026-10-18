@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Greenie Kiosk — 5 Welcome Videos Player & Live Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --brand-green: #16a34a;
+            --brand-green-hover: #22c55e;
+            --accent-glow: rgba(34, 197, 94, 0.25);
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+            --border: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top, #1e293b 0%, #0f172a 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 30px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            text-align: center;
+            max-width: 800px;
+            margin-bottom: 24px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(34, 197, 94, 0.15);
+            color: #4ade80;
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            padding: 4px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ffffff 0%, #86efac 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        p.subtitle {
+            color: var(--text-sub);
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        .main-container {
+            width: 100%;
+            max-width: 1100px;
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 24px;
+        }
+
+        @media (max-width: 900px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .player-card {
+            background: var(--bg-card);
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .player-viewport {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #kiosk-intro-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .idle-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 30px;
+            color: var(--text-sub);
+        }
+
+        .idle-screen button {
+            margin-top: 16px;
+            padding: 12px 28px;
+            border: 0;
+            border-radius: 30px;
+            background: var(--brand-green);
+            color: #fff;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 14px var(--accent-glow);
+            transition: all 0.2s;
+        }
+
+        .idle-screen button:hover {
+            background: var(--brand-green-hover);
+            transform: translateY(-2px);
+        }
+
+        .controls-bar {
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid var(--border);
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        .btn-secondary {
+            background: #334155;
+            color: #f8fafc;
+            border: 0;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 18px;
+        }
+
+        .panel h3 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .video-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.5);
+            margin-bottom: 8px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            font-size: 13px;
+        }
+
+        .video-item.active {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        .video-item.done {
+            opacity: 0.6;
+        }
+
+        .video-num {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #334155;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            margin-right: 12px;
+            flex-shrink: 0;
+        }
+
+        .video-item.active .video-num {
+            background: var(--brand-green);
+        }
+
+        .video-item.done .video-num {
+            background: #15803d;
+        }
+
+        .video-info {
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .video-title {
+            font-weight: 500;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .video-id {
+            font-size: 11px;
+            color: var(--text-sub);
+        }
+
+        .event-log {
+            font-family: monospace;
+            font-size: 12px;
+            height: 180px;
+            overflow-y: auto;
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 10px;
+            border: 1px solid #1e293b;
+            color: #a7f3d0;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .log-ts {
+            color: #64748b;
+        }
+
+        .instructions-card {
+            width: 100%;
+            max-width: 1100px;
+            margin-top: 24px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            padding: 24px;
+        }
+
+        .instructions-card h2 {
+            font-size: 20px;
+            margin-bottom: 14px;
+            color: #fff;
+        }
+
+        pre {
+            background: #0f172a;
+            padding: 16px;
+            border-radius: 10px;
+            overflow-x: auto;
+            font-size: 13px;
+            color: #38bdf8;
+            border: 1px solid #334155;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <span class="badge">Kiosk AIML Media Service</span>
+        <h1>Welcome Intro Videos Player</h1>
+        <p class="subtitle">
+            5 Cloudinary videos running sequentially before Greeny greets the customer.
+            Supports muted autoplay, inline playback, skip handoff, and WebSocket gating.
+        </p>
+    </header>
+
+    <div class="main-container">
+        <!-- Video Player Card -->
+        <div class="player-card">
+            <div class="player-viewport">
+                <div id="kiosk-intro-container">
+                    <div class="idle-screen" id="idle-screen">
+                        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        <h2 style="color: #fff; margin-top: 12px; font-size: 20px;">Ready to Play Welcome Sequence</h2>
+                        <p style="font-size: 13px; margin-top: 4px;">Click the button below to start the 5-video intro playlist.</p>
+                        <button id="start-btn">Start 5 Intro Videos ▶</button>
+                    </div>
+                </div>
+            </div>
+            <div class="controls-bar">
+                <div id="status-label" style="font-size: 14px; color: #94a3b8;">Status: Idle</div>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-secondary" id="restart-btn">Restart Playlist</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Info -->
+        <div class="sidebar">
+            <div class="panel">
+                <h3>Cloudinary 5-Video Queue</h3>
+                <div id="playlist-items">
+                    <div style="color: #64748b; font-size: 13px;">Loading playlist from /media/intro-videos...</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Live Event Stream</h3>
+                <div class="event-log" id="event-log"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Frontend Integration Code Guide -->
+    <div class="instructions-card">
+        <h2>Frontend Integration (How to Run in Kiosk UI)</h2>
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 12px;">
+            Copy-paste this module into your kiosk frontend. Hide the Greeny avatar until the intro video finishes or the user clicks "Meet Greeny".
+        </p>
+
+        <pre><code>// 1. Import player module from the backend
+import { playKioskIntro } from "https://YOUR_BACKEND_HOST/media/intro-player.js";
+
+// 2. Play before connecting or during startup
+const introContainer = document.getElementById("intro-container");
+const avatarContainer = document.getElementById("avatar-container");
+
+avatarContainer.hidden = true;
+introContainer.hidden = false;
+
+// Plays 5 Cloudinary videos (1 -> 3 -> 5 -> 4 -> 2)
+const result = await playKioskIntro(introContainer, {
+    apiBase: "https://YOUR_BACKEND_HOST"
+});
+
+// result is: 'intro_done' | 'intro_skipped' | 'intro_failed'
+introContainer.hidden = true;
+avatarContainer.hidden = false;
+
+// 3. Connect to WebSocket or trigger greeting
+const ws = new WebSocket(`wss://YOUR_BACKEND_HOST/ws/${sessionId}?v=2&auto_greet=1`);
+</code></pre>
+    </div>
+
+    <script type="module">
+        import { playIntroPlaylist } from '/media/intro-player.js';
+
+        const container = document.getElementById('kiosk-intro-container');
+        const idleScreen = document.getElementById('idle-screen');
+        const startBtn = document.getElementById('start-btn');
+        const restartBtn = document.getElementById('restart-btn');
+        const statusLabel = document.getElementById('status-label');
+        const playlistContainer = document.getElementById('playlist-items');
+        const eventLog = document.getElementById('event-log');
+
+        let playlist = null;
+        let controller = null;
+
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.innerHTML = `<span class="log-ts">[${time}]</span> ${msg}`;
+            eventLog.append(div);
+            eventLog.scrollTop = eventLog.scrollHeight;
+        }
+
+        async function loadPlaylist() {
+            try {
+                const res = await fetch('/media/intro-videos');
+                playlist = await res.json();
+                renderPlaylist();
+                log(`Loaded playlist with ${playlist.videos.length} Cloudinary videos.`);
+            } catch (err) {
+                log(`Failed to load playlist: ${err.message}`);
+            }
+        }
+
+        function renderPlaylist(activeIndex = -1) {
+            if (!playlist?.videos) return;
+            playlistContainer.innerHTML = '';
+            playlist.videos.forEach((v, idx) => {
+                const item = document.createElement('div');
+                item.className = 'video-item';
+                if (idx === activeIndex) item.classList.add('active');
+                if (idx < activeIndex) item.classList.add('done');
+                item.innerHTML = `
+                    <div class="video-num">${idx + 1}</div>
+                    <div class="video-info">
+                        <div class="video-title">${v.title || v.id}</div>
+                        <div class="video-id">${v.id}</div>
+                    </div>
+                `;
+                playlistContainer.append(item);
+            });
+        }
+
+        async function startPlayback() {
+            if (!playlist) await loadPlaylist();
+            if (!playlist?.videos?.length) return;
+
+            if (controller) controller.abort();
+            controller = new AbortController();
+
+            idleScreen.style.display = 'none';
+            statusLabel.textContent = 'Status: Playing Welcome Intro Sequence...';
+            log('Starting sequential video playback...');
+
+            const outcome = await playIntroPlaylist(container, playlist, {
+                signal: controller.signal,
+                onProgress: ({ index, total, video }) => {
+                    renderPlaylist(index);
+                    statusLabel.textContent = `Status: Playing video ${index + 1} of ${total} (${video.title})`;
+                    log(`Playing video ${index + 1}/${total}: ${video.id}`);
+                }
+            });
+
+            log(`Sequence complete: Event = ${outcome}`);
+            statusLabel.textContent = `Status: Completed (${outcome}) — Greeny greeting handoff`;
+            renderPlaylist(-1);
+            idleScreen.style.display = 'flex';
+        }
+
+        startBtn.onclick = startPlayback;
+        restartBtn.onclick = startPlayback;
+        loadPlaylist();
+    </script>
+</body>
+</html>
